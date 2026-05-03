@@ -1,6 +1,6 @@
-# DeepSeek × Claude Code 一键配置工具
+# DeepSeek × Claude Code / Codex 一键配置工具
 
-解决 Claude Code 接入 DeepSeek 时 `effortLevel` 配置不生效的问题。
+解决 Claude Code 接入 DeepSeek 时 `effortLevel` 配置不生效的问题，并提供 Codex CLI 的 DeepSeek profile 接入。
 
 ## 问题
 
@@ -25,6 +25,7 @@ npx -y github:yunshu0909/deepseek-claude-setup
 - **开启代理** — 一键部署代理 + 修改 settings.json + 注册开机自启
 - **关闭代理** — 一键还原所有配置
 - **开启/关闭思考模式** — 主面板一键切换，运行中自动重启代理生效
+- **开启/关闭 Codex 接入** — 为 Codex CLI 写入 `profiles.deepseek`，不覆盖默认 Codex 配置
 - **修改配置** — 更改模型、思考模式或思考深度（运行中自动重启代理）
 
 ## 原理
@@ -32,6 +33,9 @@ npx -y github:yunshu0909/deepseek-claude-setup
 ```
 Claude Code → localhost:17861 (代理) → api.deepseek.com
                   ↑ 覆盖 model + thinking.type + output_config.effort
+
+Codex CLI → localhost:17861/v1/responses (代理) → api.deepseek.com/chat/completions
+                  ↑ Responses API 转 DeepSeek Chat Completions
 ```
 
 开启代理时工具会同步修改 `~/.claude/settings.json`：
@@ -53,6 +57,18 @@ Claude Code → localhost:17861 (代理) → api.deepseek.com
 - `model`：使用配置向导选择的 `deepseek-v4-pro` 或 `deepseek-v4-flash`
 - `thinking.type`：配置为 `enabled` 或 `disabled`
 - `output_config.effort`：思考模式开启时为 `high` 或 `max`；思考模式关闭时不发送
+
+## Codex CLI
+
+在主面板选择「开启 Codex 接入」后，工具会在 `~/.codex/config.toml` 追加一个受管理的 profile：
+
+```bash
+codex -p deepseek
+```
+
+它不会覆盖默认 `codex` 配置。关闭 Codex 接入时，只移除工具写入的 managed block。
+
+当前 Codex 接入支持普通文本会话和基础 function tools 转发；复杂工具调用、多轮 tool-call 回填仍建议先小范围验证。
 
 ## 测试
 

@@ -4,10 +4,11 @@ const configStore = require('./src/config-store');
 const proxyManager = require('./src/proxy-manager');
 const launchdManager = require('./src/launchd-manager');
 const settingsPatcher = require('./src/settings-patcher');
+const codexPatcher = require('./src/codex-patcher');
 const ui = require('./src/ui');
 const pkg = require('./package.json');
 
-const HELP = `DeepSeek × Claude Code 一键配置工具
+const HELP = `DeepSeek × Claude Code / Codex 一键配置工具
 
 Usage:
   npx github:yunshu0909/deepseek-claude-setup
@@ -36,10 +37,10 @@ async function main() {
     const newCfg = await ui.configWizard(null);
     if (!newCfg) return;  // 用户取消
     // 配置完直接进主面板
-    await ui.mainPanel(newCfg, proxyManager, launchdManager, settingsPatcher);
+    await ui.mainPanel(newCfg, proxyManager, launchdManager, settingsPatcher, codexPatcher);
   } else {
     // 已有配置 → 主面板
-    await ui.mainPanel(config, proxyManager, launchdManager, settingsPatcher);
+    await ui.mainPanel(config, proxyManager, launchdManager, settingsPatcher, codexPatcher);
   }
 }
 

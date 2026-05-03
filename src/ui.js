@@ -104,11 +104,12 @@ async function configWizard(existing) {
 }
 
 // 主面板
-async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) {
+async function mainPanel(config, proxyManager, launchdManager, settingsPatcher, codexPatcher) {
   while (true) {
     config.thinking = config.thinking || 'enabled';
     const running = await proxyManager.isRunning();
     const patched = settingsPatcher.isPatched();
+    const codexPatched = codexPatcher?.isPatched?.() || false;
     const thinkingText = config.thinking === 'disabled' ? '关闭' : `开启 (${config.effort})`;
 
     // 状态判断
@@ -124,7 +125,7 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) 
 
     intro(`🔧 DeepSeek × Claude Code`);
     note(
-      `状态: ${statusIcon} ${statusText}\n模型: ${config.model}  |  思考模式: ${thinkingText}\n${running ? '代理: localhost:17861' : ''}`
+      `状态: ${statusIcon} ${statusText}\n模型: ${config.model}  |  思考模式: ${thinkingText}\nCodex: ${codexPatched ? '已接入 (codex -p deepseek)' : '未接入'}\n${running ? '代理: localhost:17861' : ''}`
     );
 
     const options = [];
@@ -140,6 +141,12 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) 
       value: 'toggle-thinking',
       label: config.thinking === 'disabled' ? '🧠 开启思考模式' : '🧠 关闭思考模式',
     });
+    if (codexPatcher) {
+      options.push({
+        value: codexPatched ? 'disable-codex' : 'enable-codex',
+        label: codexPatched ? '⌘ 关闭 Codex 接入' : '⌘ 开启 Codex 接入',
+      });
+    }
     options.push({ value: 'reconfig', label: '⚙ 修改配置' });
     options.push({ value: 'quit', label: '✕ 退出' });
 
@@ -150,6 +157,7 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) 
       await doStart(config, proxyManager, launchdManager, settingsPatcher);
     } else if (choice === 'stop') {
       await doStop(proxyManager, launchdManager, settingsPatcher);
+      if (codexPatched) codexPatcher.restore();
     } else if (choice === 'reconfig') {
       const newCfg = await configWizard(config);
       if (newCfg) {
@@ -157,6 +165,7 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) 
           await doStop(proxyManager, launchdManager, settingsPatcher);
           await doStart(newCfg, proxyManager, launchdManager, settingsPatcher);
         }
+        if (codexPatched) codexPatcher.patch(newCfg);
         config = newCfg;
       }
     } else if (choice === 'toggle-thinking') {
@@ -168,6 +177,14 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) 
       } else {
         note(`✅ 思考模式已${config.thinking === 'disabled' ? '关闭' : '开启'}`);
       }
+      if (codexPatched) codexPatcher.patch(config);
+    } else if (choice === 'enable-codex') {
+      await doStart(config, proxyManager, launchdManager, settingsPatcher, { patchClaude: false });
+      codexPatcher.patch(config);
+      note('✅ Codex 已接入。使用：codex -p deepseek');
+    } else if (choice === 'disable-codex') {
+      codexPatcher.restore();
+      note('✅ Codex 接入已关闭，默认 Codex 配置不受影响');
     } else if (choice === 'fix') {
       if (running) {
         // 进程在但配置没改
@@ -183,7 +200,8 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) 
   return config;
 }
 
-async function doStart(config, proxyManager, launchdManager, settingsPatcher) {
+async function doStart(config, proxyManager, launchdManager, settingsPatcher, options = {}) {
+  const patchClaude = options.patchClaude !== false;
   const s = spinner();
   try {
     s.start('正在部署...');
@@ -204,17 +222,21 @@ async function doStart(config, proxyManager, launchdManager, settingsPatcher) {
     launchdManager.install();
     s.message('✅ 开机自启已注册');
 
-    // Patch settings
-    settingsPatcher.patch(config);
-    s.message('✅ Claude Code 配置已修改');
+    if (patchClaude) {
+      settingsPatcher.patch(config);
+      s.message('✅ Claude Code 配置已修改');
+    }
 
-    // Verify
-    s.message('⏳ 验证连接...');
-    const result = await verifier.verify(config);
-    if (result.ok) {
-      s.stop('✅ 全部完成！下次启动 Claude Code 即可生效');
+    if (patchClaude) {
+      s.message('⏳ 验证连接...');
+      const result = await verifier.verify(config);
+      if (result.ok) {
+        s.stop('✅ 全部完成！下次启动 Claude Code 即可生效');
+      } else {
+        s.stop(`⚠ 代理已部署但验证失败: ${result.error}。请检查网络和 API Key`);
+      }
     } else {
-      s.stop(`⚠ 代理已部署但验证失败: ${result.error}。请检查网络和 API Key`);
+      s.stop('✅ 代理已就绪');
     }
   } catch (err) {
     s.stop(`❌ 部署失败: ${err.message}`);

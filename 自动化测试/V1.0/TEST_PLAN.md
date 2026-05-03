@@ -26,6 +26,8 @@
 - UT-03：`settings-patcher.restore()` 在多次 patch 后仍还原原始 settings
 - UT-04：备份缺失时的兜底 restore 不会让 Claude Code 指向已停止的本地代理
 - UT-05：思考模式关闭时 settings 不写入强制 effort，并将 `alwaysThinkingEnabled=false`
+- UT-06：Codex patcher 只新增 `profiles.deepseek`，不覆盖默认 Codex 模型配置
+- UT-07：Codex restore 只移除 managed block，保留用户原始 config
 
 ### Integration
 - IT-01：代理 `/__health` 返回当前模型、thinking、effort
@@ -33,6 +35,8 @@
 - IT-03：代理转发前覆盖 `model`、`thinking.type`、`output_config.effort`
 - IT-04：代理使用保存的 DeepSeek API Key 设置上游鉴权头
 - IT-05：思考模式关闭时代理转发 `thinking.type=disabled` 且移除 `output_config`
+- IT-06：代理接收 Codex `/v1/responses` 请求并返回 Responses SSE 事件
+- IT-07：代理将 Codex Responses 请求转换为 DeepSeek `/chat/completions`
 
 ### E2E
 - E2E-01：在临时配置目录启动代理，向本地假 DeepSeek 上游发送请求，验证完整转发链路

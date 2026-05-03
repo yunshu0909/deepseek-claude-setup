@@ -8,6 +8,7 @@ const CONFIG_DIR = process.env.DEEPSEEK_CLAUDE_CONFIG_DIR || path.join(os.homedi
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 const TARGET_HOST = process.env.DEEPSEEK_CLAUDE_TARGET_HOST || 'api.deepseek.com';
 const TARGET_PATH_PREFIX = process.env.DEEPSEEK_CLAUDE_TARGET_PREFIX || '/anthropic';
+const OPENAI_TARGET_PATH_PREFIX = process.env.DEEPSEEK_CLAUDE_OPENAI_TARGET_PREFIX || '';
 const TARGET_PORT = process.env.DEEPSEEK_CLAUDE_TARGET_PORT ? Number(process.env.DEEPSEEK_CLAUDE_TARGET_PORT) : 443;
 const TARGET_PROTOCOL = process.env.DEEPSEEK_CLAUDE_TARGET_PROTOCOL || 'https:';
 const PORT = process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? Number(process.env.DEEPSEEK_CLAUDE_PROXY_PORT) : 17861;
@@ -36,6 +37,162 @@ function healthBody() {
     thinking,
     effort: thinking === 'enabled' ? normalizeEffort(CONFIG.effort || 'max') : null,
   });
+}
+
+function sendSse(res, event) {
+  res.write(`event: ${event.type}\n`);
+  res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function responseMessageEvents(text, model) {
+  const now = Math.floor(Date.now() / 1000);
+  const responseId = `resp_${Date.now()}`;
+  const messageId = `msg_${Date.now()}`;
+  const item = {
+    id: messageId,
+    type: 'message',
+    status: 'completed',
+    role: 'assistant',
+    content: [{ type: 'output_text', text, annotations: [] }],
+  };
+  const response = {
+    id: responseId,
+    object: 'response',
+    created_at: now,
+    status: 'completed',
+    model,
+    output: [item],
+    output_text: text,
+    usage: null,
+  };
+
+  return [
+    { type: 'response.created', response: { ...response, status: 'in_progress', output: [] } },
+    { type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress', content: [] } },
+    { type: 'response.content_part.added', output_index: 0, item_id: messageId, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } },
+    { type: 'response.output_text.delta', output_index: 0, item_id: messageId, content_index: 0, delta: text },
+    { type: 'response.output_text.done', output_index: 0, item_id: messageId, content_index: 0, text },
+    { type: 'response.content_part.done', output_index: 0, item_id: messageId, content_index: 0, part: item.content[0] },
+    { type: 'response.output_item.done', output_index: 0, item },
+    { type: 'response.completed', response },
+  ];
+}
+
+function contentToText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map(part => part.text || part.content || '').filter(Boolean).join('\n');
+}
+
+function responsesInputToMessages(payload) {
+  const messages = [];
+  if (payload.instructions) {
+    messages.push({ role: 'system', content: payload.instructions });
+  }
+  for (const item of payload.input || []) {
+    if (item.type !== 'message') continue;
+    const role = item.role === 'developer' ? 'system' : item.role;
+    const text = contentToText(item.content);
+    if (text) messages.push({ role, content: text });
+  }
+  if (!messages.some(message => message.role === 'user')) {
+    messages.push({ role: 'user', content: 'Continue.' });
+  }
+  return messages;
+}
+
+function responsesToolsToChatTools(tools) {
+  if (!Array.isArray(tools)) return undefined;
+  const functions = tools
+    .filter(tool => tool.type === 'function' && tool.name)
+    .map(tool => ({
+      type: 'function',
+      function: {
+        name: tool.name,
+        description: tool.description || '',
+        parameters: tool.parameters || { type: 'object', properties: {} },
+      },
+    }));
+  return functions.length ? functions : undefined;
+}
+
+function writeResponsesFromText(res, payload, text) {
+  if (payload.stream === false) {
+    const events = responseMessageEvents(text, payload.model);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(events.at(-1).response));
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  for (const event of responseMessageEvents(text, payload.model)) sendSse(res, event);
+  res.end();
+}
+
+function handleResponses(req, res, payload) {
+  const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
+  const body = {
+    model: CONFIG.model || payload.model || 'deepseek-v4-pro',
+    messages: responsesInputToMessages(payload),
+    stream: true,
+    thinking: { type: thinking },
+  };
+  const tools = responsesToolsToChatTools(payload.tools);
+  if (tools) body.tools = tools;
+  if (thinking === 'enabled') {
+    body.output_config = { effort: normalizeEffort(CONFIG.effort || 'max') };
+  }
+
+  const bodyOut = JSON.stringify(body);
+  const headers = {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(bodyOut),
+    Authorization: `Bearer ${CONFIG.apiKey}`,
+  };
+
+  const client = TARGET_PROTOCOL === 'http:' ? http : https;
+  const upstream = client.request({
+    hostname: TARGET_HOST,
+    port: TARGET_PORT,
+    path: `${OPENAI_TARGET_PATH_PREFIX}/chat/completions`,
+    method: 'POST',
+    headers,
+    rejectUnauthorized: process.env.DEEPSEEK_CLAUDE_STRICT_TLS === '1',
+  }, upstreamRes => {
+    let collected = '';
+    upstreamRes.setEncoding('utf8');
+    upstreamRes.on('data', chunk => {
+      for (const line of chunk.split(/\r?\n/)) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(data);
+          const delta = parsed.choices?.[0]?.delta;
+          if (delta?.reasoning_content) collected += delta.reasoning_content;
+          if (delta?.content) collected += delta.content;
+        } catch {}
+      }
+    });
+    upstreamRes.on('end', () => {
+      if (upstreamRes.statusCode && upstreamRes.statusCode >= 400) {
+        res.writeHead(upstreamRes.statusCode, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: collected || `Upstream HTTP ${upstreamRes.statusCode}` } }));
+        return;
+      }
+      writeResponsesFromText(res, { ...payload, model: body.model }, collected || '');
+    });
+  });
+
+  upstream.on('error', err => {
+    res.writeHead(502, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: err.message } }));
+  });
+  upstream.write(bodyOut);
+  upstream.end();
 }
 
 let CONFIG;
@@ -85,6 +242,10 @@ const server = http.createServer((req, res) => {
     } catch (err) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: `Invalid JSON: ${err.message}` }));
+    }
+
+    if (req.url.startsWith('/v1/responses') || req.url.startsWith('/responses')) {
+      return handleResponses(req, res, payload);
     }
 
     const incomingModel = payload.model || '?';

@@ -7,15 +7,19 @@ const path = require('path');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'deepseek-claude-setup-'));
 const configDir = path.join(tmp, '.deepseek-claude');
 const claudeDir = path.join(tmp, '.claude');
+const codexDir = path.join(tmp, '.codex');
 const settingsPath = path.join(claudeDir, 'settings.json');
+const codexConfigPath = path.join(codexDir, 'config.toml');
 const proxyPort = 19000 + Math.floor(Math.random() * 1000);
 
 process.env.DEEPSEEK_CLAUDE_CONFIG_DIR = configDir;
 process.env.CLAUDE_SETTINGS_PATH = settingsPath;
+process.env.CODEX_CONFIG_PATH = codexConfigPath;
 process.env.DEEPSEEK_CLAUDE_PROXY_PORT = String(proxyPort);
 
 const configStore = require('./src/config-store');
 const settingsPatcher = require('./src/settings-patcher');
+const codexPatcher = require('./src/codex-patcher');
 const proxyManager = require('./src/proxy-manager');
 
 let passed = 0;
@@ -97,9 +101,40 @@ function makeUpstream() {
   });
 }
 
+function makeChatUpstream() {
+  const calls = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      calls.push({
+        method: req.method,
+        url: req.url,
+        headers: req.headers,
+        body: JSON.parse(Buffer.concat(chunks).toString()),
+      });
+      const parts = [
+        { choices: [{ delta: { reasoning_content: 'think ' } }] },
+        { choices: [{ delta: { content: 'hi' } }] },
+        { choices: [{ delta: {}, finish_reason: 'stop' }] },
+      ];
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      for (const part of parts) res.write(`data: ${JSON.stringify(part)}\n\n`);
+      res.end('data: [DONE]\n\n');
+    });
+  });
+
+  return new Promise(resolve => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve({ server, calls, port: server.address().port });
+    });
+  });
+}
+
 async function run() {
   fs.mkdirSync(configDir, { recursive: true });
   fs.mkdirSync(claudeDir, { recursive: true });
+  fs.mkdirSync(codexDir, { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'proxy', 'proxy.js'), path.join(configDir, 'proxy.js'));
 
   const originalSettings = {
@@ -146,6 +181,24 @@ async function run() {
   });
   settingsPatcher.patch({ ...cfg, model: 'deepseek-v4-pro', effort: 'max' });
   settingsPatcher.restore();
+
+  console.log('\n-- codex-patcher --');
+  fs.writeFileSync(codexConfigPath, 'model = "gpt-5.5"\nmodel_reasoning_effort = "high"\n');
+  codexPatcher.patch(cfg);
+  const codexConfig = fs.readFileSync(codexConfigPath, 'utf-8');
+  check('adds a DeepSeek Codex profile without replacing default model', () => {
+    assert.match(codexConfig, /model = "gpt-5.5"/);
+    assert.match(codexConfig, /\[profiles\.deepseek\]/);
+    assert.match(codexConfig, /model_provider = "deepseek_local"/);
+    assert.match(codexConfig, new RegExp(`base_url = "http://localhost:${proxyPort}/v1"`));
+    assert.match(codexConfig, /experimental_bearer_token = "sk-test-key"/);
+  });
+  codexPatcher.restore();
+  check('removes only the managed Codex profile block', () => {
+    const restored = fs.readFileSync(codexConfigPath, 'utf-8');
+    assert.match(restored, /model = "gpt-5.5"/);
+    assert.doesNotMatch(restored, /\[profiles\.deepseek\]/);
+  });
   check('restores the original settings after repeated patch calls', () => {
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf-8')), originalSettings);
   });
@@ -241,6 +294,37 @@ async function run() {
   } finally {
     await proxyManager.stop();
     await new Promise(resolve => upstreamOff.server.close(resolve));
+  }
+
+  console.log('\n-- codex responses proxy --');
+  const chatUpstream = await makeChatUpstream();
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(chatUpstream.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    const response = await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      instructions: 'Say hi.',
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
+      tools: [{ type: 'function', name: 'exec_command', description: 'Run command', parameters: { type: 'object', properties: {} } }],
+      stream: true,
+    });
+    check('accepts Codex Responses API requests and returns SSE events', () => {
+      assert.strictEqual(response.statusCode, 200);
+      assert.match(response.body, /response.output_text.delta/);
+      assert.match(response.body, /think hi/);
+      assert.match(response.body, /response.completed/);
+    });
+    check('translates Codex Responses requests into DeepSeek chat completions', () => {
+      assert.strictEqual(chatUpstream.calls[0].url, '/chat/completions');
+      assert.strictEqual(chatUpstream.calls[0].body.model, cfg.model);
+      assert.deepStrictEqual(chatUpstream.calls[0].body.thinking, { type: 'enabled' });
+      assert.deepStrictEqual(chatUpstream.calls[0].body.output_config, { effort: cfg.effort });
+      assert.strictEqual(chatUpstream.calls[0].body.tools[0].function.name, 'exec_command');
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(resolve => chatUpstream.server.close(resolve));
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
