@@ -1,0 +1,27 @@
+{
+  "name": "deepseek-claude-setup",
+  "version": "1.0.0",
+  "description": "一键配置 DeepSeek 模型与思考强度代理接入 Claude Code",
+  "bin": {
+    "deepseek-claude-setup": "./cli.js"
+  },
+  "scripts": {
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.7.0"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "license": "MIT",
+  "keywords": ["deepseek", "claude-code", "reasoning", "proxy", "setup"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yunshu0909/deepseek-claude-setup.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yunshu0909/deepseek-claude-setup/issues"
+  },
+  "homepage": "https://github.com/yunshu0909/deepseek-claude-setup#readme"
+}
