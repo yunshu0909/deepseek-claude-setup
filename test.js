@@ -155,6 +155,8 @@ async function run() {
   check('fallback restore never leaves Claude Code pointed at the stopped proxy', () => {
     assert.strictEqual(fallbackRestored.env.ANTHROPIC_BASE_URL, settingsPatcher.DIRECT_URL);
     assert.notStrictEqual(fallbackRestored.env.ANTHROPIC_BASE_URL, settingsPatcher.PROXY_URL);
+    assert.strictEqual(fallbackRestored.env.ANTHROPIC_AUTH_TOKEN, cfg.apiKey);
+    assert.strictEqual(fallbackRestored.env.ANTHROPIC_MODEL, cfg.model);
   });
 
   console.log('\n-- proxy injection --');

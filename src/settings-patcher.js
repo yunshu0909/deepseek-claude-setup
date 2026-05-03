@@ -7,6 +7,7 @@ const PROXY_URL = process.env.DEEPSEEK_CLAUDE_PROXY_URL
   || (process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? `http://localhost:${process.env.DEEPSEEK_CLAUDE_PROXY_PORT}` : 'http://localhost:17861');
 const DIRECT_URL = 'https://api.deepseek.com/anthropic';
 const FLASH_MODEL = 'deepseek-v4-flash';
+const SAVED_CONFIG_PATH = path.join(process.env.DEEPSEEK_CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.deepseek-claude'), 'config.json');
 
 function read() {
   if (!fs.existsSync(SETTINGS_PATH)) return null;
@@ -18,6 +19,15 @@ function backup() {
   if (!src) return;
   if (fs.existsSync(SETTINGS_PATH + '.deepseek-backup')) return;
   fs.writeFileSync(SETTINGS_PATH + '.deepseek-backup', JSON.stringify(src, null, 2));
+}
+
+function readSavedConfig() {
+  try {
+    if (!fs.existsSync(SAVED_CONFIG_PATH)) return {};
+    return JSON.parse(fs.readFileSync(SAVED_CONFIG_PATH, 'utf-8'));
+  } catch {
+    return {};
+  }
 }
 
 function restore() {
@@ -32,7 +42,16 @@ function restore() {
   if (fs.existsSync(SETTINGS_PATH)) {
     const s = read();
     if (s && s.env) {
+      const saved = readSavedConfig();
+      const model = saved.model || s.env.ANTHROPIC_MODEL || 'deepseek-v4-pro';
       s.env.ANTHROPIC_BASE_URL = DIRECT_URL;
+      if (saved.apiKey) {
+        s.env.ANTHROPIC_AUTH_TOKEN = saved.apiKey;
+      }
+      s.env.ANTHROPIC_MODEL = model;
+      s.env.ANTHROPIC_DEFAULT_OPUS_MODEL = model;
+      s.env.ANTHROPIC_DEFAULT_SONNET_MODEL = model;
+      s.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = FLASH_MODEL;
       if (s.env.CLAUDE_CODE_EFFORT_LEVEL && s.effortLevel === s.env.CLAUDE_CODE_EFFORT_LEVEL) {
         delete s.effortLevel;
       }
