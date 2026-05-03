@@ -69,6 +69,7 @@ function patch(config = {}) {
 
   const model = config.model || s.env.ANTHROPIC_MODEL || 'deepseek-v4-pro';
   const effort = config.effort || s.env.CLAUDE_CODE_EFFORT_LEVEL || 'max';
+  const thinking = config.thinking === 'disabled' ? 'disabled' : 'enabled';
 
   s.env.ANTHROPIC_BASE_URL = PROXY_URL;
   if (config.apiKey) {
@@ -79,10 +80,15 @@ function patch(config = {}) {
   s.env.ANTHROPIC_DEFAULT_SONNET_MODEL = model;
   s.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = model === FLASH_MODEL ? FLASH_MODEL : FLASH_MODEL;
   s.env.CLAUDE_CODE_SUBAGENT_MODEL = model === FLASH_MODEL ? FLASH_MODEL : FLASH_MODEL;
-  s.env.CLAUDE_CODE_EFFORT_LEVEL = effort;
+  if (thinking === 'enabled') {
+    s.env.CLAUDE_CODE_EFFORT_LEVEL = effort;
+    s.effortLevel = effort;
+  } else {
+    delete s.env.CLAUDE_CODE_EFFORT_LEVEL;
+    delete s.effortLevel;
+  }
   s.model = model;
-  s.effortLevel = effort;
-  s.alwaysThinkingEnabled = true;
+  s.alwaysThinkingEnabled = thinking === 'enabled';
   fs.writeFileSync(SETTINGS_PATH, JSON.stringify(s, null, 2));
 }
 

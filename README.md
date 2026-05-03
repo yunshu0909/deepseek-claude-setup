@@ -20,11 +20,12 @@ npx -y github:yunshu0909/deepseek-claude-setup
 
 ## 使用
 
-首次运行进入配置向导（输入 API Key、选模型、选思考深度），之后进入主面板：
+首次运行进入配置向导（输入 API Key、选模型、选思考模式、选思考深度），之后进入主面板：
 
 - **开启代理** — 一键部署代理 + 修改 settings.json + 注册开机自启
 - **关闭代理** — 一键还原所有配置
-- **修改配置** — 更改模型或思考深度（运行中自动重启代理）
+- **开启/关闭思考模式** — 主面板一键切换，运行中自动重启代理生效
+- **修改配置** — 更改模型、思考模式或思考深度（运行中自动重启代理）
 
 ## 原理
 
@@ -42,16 +43,16 @@ Claude Code → localhost:17861 (代理) → api.deepseek.com
 - `ANTHROPIC_DEFAULT_SONNET_MODEL=<选择的 DeepSeek 模型>`
 - `ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash`
 - `CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash`
-- `CLAUDE_CODE_EFFORT_LEVEL=<high|max>`
+- `CLAUDE_CODE_EFFORT_LEVEL=<high|max>`（仅思考模式开启时写入）
 - `model=<选择的 DeepSeek 模型>`
-- `effortLevel=<high|max>`
-- `alwaysThinkingEnabled=true`
+- `effortLevel=<high|max>`（仅思考模式开启时写入）
+- `alwaysThinkingEnabled=<true|false>`
 
 代理层会再兜底覆盖请求体：
 
 - `model`：使用配置向导选择的 `deepseek-v4-pro` 或 `deepseek-v4-flash`
-- `thinking.type`：默认 `enabled`
-- `output_config.effort`：`high` 或 `max`
+- `thinking.type`：配置为 `enabled` 或 `disabled`
+- `output_config.effort`：思考模式开启时为 `high` 或 `max`；思考模式关闭时不发送
 
 ## 测试
 

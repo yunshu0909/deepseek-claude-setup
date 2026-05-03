@@ -39,6 +39,18 @@ async function stepModel(existing) {
 }
 
 // 第三步：选择思考等级
+async function stepThinking(existing) {
+  const t = await select({
+    message: '选择思考模式',
+    options: [
+      { value: 'enabled', label: '开启思考模式（推荐 — 复杂任务）', hint: 'Thinking on' },
+      { value: 'disabled', label: '关闭思考模式（更快响应）', hint: 'Thinking off' },
+    ],
+    initialValue: existing || 'enabled',
+  });
+  return isCancel(t) ? null : t;
+}
+
 async function stepEffort(existing) {
   const e = await select({
     message: '选择思考深度',
@@ -53,8 +65,9 @@ async function stepEffort(existing) {
 
 // 第四步：确认配置
 async function stepConfirm(cfg) {
+  const thinkingText = cfg.thinking === 'disabled' ? '关闭' : `开启 (${cfg.effort})`;
   return confirm({
-    message: `确认配置？\n  模型: ${cfg.model}  |  思考深度: ${cfg.effort}  |  API Key: ${cfg.apiKey.slice(0,7)}****`,
+    message: `确认配置？\n  模型: ${cfg.model}  |  思考模式: ${thinkingText}  |  API Key: ${cfg.apiKey.slice(0,7)}****`,
     initialValue: true,
   });
 }
@@ -69,10 +82,16 @@ async function configWizard(existing) {
   const model = await stepModel(existing?.model);
   if (model === null) { outro('已取消'); return null; }
 
-  const effort = await stepEffort(existing?.effort);
-  if (effort === null) { outro('已取消'); return null; }
+  const thinking = await stepThinking(existing?.thinking || 'enabled');
+  if (thinking === null) { outro('已取消'); return null; }
 
-  const cfg = { apiKey, model, effort };
+  let effort = existing?.effort || 'max';
+  if (thinking === 'enabled') {
+    effort = await stepEffort(existing?.effort);
+    if (effort === null) { outro('已取消'); return null; }
+  }
+
+  const cfg = { apiKey, model, thinking, effort };
 
   if (!await stepConfirm(cfg)) {
     outro('已取消');
@@ -87,8 +106,10 @@ async function configWizard(existing) {
 // 主面板
 async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) {
   while (true) {
+    config.thinking = config.thinking || 'enabled';
     const running = await proxyManager.isRunning();
     const patched = settingsPatcher.isPatched();
+    const thinkingText = config.thinking === 'disabled' ? '关闭' : `开启 (${config.effort})`;
 
     // 状态判断
     let statusIcon, statusText, anomaly = false;
@@ -103,7 +124,7 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) 
 
     intro(`🔧 DeepSeek × Claude Code`);
     note(
-      `状态: ${statusIcon} ${statusText}\n模型: ${config.model}  |  思考深度: ${config.effort}\n${running ? '代理: localhost:17861' : ''}`
+      `状态: ${statusIcon} ${statusText}\n模型: ${config.model}  |  思考模式: ${thinkingText}\n${running ? '代理: localhost:17861' : ''}`
     );
 
     const options = [];
@@ -115,6 +136,10 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) 
     } else {
       options.push({ value: 'start', label: '🚀 开启代理' });
     }
+    options.push({
+      value: 'toggle-thinking',
+      label: config.thinking === 'disabled' ? '🧠 开启思考模式' : '🧠 关闭思考模式',
+    });
     options.push({ value: 'reconfig', label: '⚙ 修改配置' });
     options.push({ value: 'quit', label: '✕ 退出' });
 
@@ -133,6 +158,15 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher) 
           await doStart(newCfg, proxyManager, launchdManager, settingsPatcher);
         }
         config = newCfg;
+      }
+    } else if (choice === 'toggle-thinking') {
+      config = { ...config, thinking: config.thinking === 'disabled' ? 'enabled' : 'disabled' };
+      configStore.write(config);
+      if (running) {
+        await doStop(proxyManager, launchdManager, settingsPatcher);
+        await doStart(config, proxyManager, launchdManager, settingsPatcher);
+      } else {
+        note(`✅ 思考模式已${config.thinking === 'disabled' ? '关闭' : '开启'}`);
       }
     } else if (choice === 'fix') {
       if (running) {

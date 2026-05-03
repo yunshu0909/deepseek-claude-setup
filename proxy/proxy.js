@@ -28,12 +28,13 @@ function normalizeThinking(thinking) {
 }
 
 function healthBody() {
+  const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
   return JSON.stringify({
     service: SERVICE_NAME,
     ok: true,
     model: CONFIG.model || 'deepseek-v4-pro',
-    thinking: normalizeThinking(CONFIG.thinking || 'enabled'),
-    effort: normalizeEffort(CONFIG.effort || 'max'),
+    thinking,
+    effort: thinking === 'enabled' ? normalizeEffort(CONFIG.effort || 'max') : null,
   });
 }
 
@@ -87,12 +88,17 @@ const server = http.createServer((req, res) => {
     }
 
     const incomingModel = payload.model || '?';
+    const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
     payload.model = CONFIG.model || payload.model || 'deepseek-v4-pro';
-    payload.thinking = { ...(payload.thinking || {}), type: normalizeThinking(CONFIG.thinking || 'enabled') };
-    payload.output_config = { ...(payload.output_config || {}), effort: normalizeEffort(CONFIG.effort || 'max') };
+    payload.thinking = { ...(payload.thinking || {}), type: thinking };
+    if (thinking === 'enabled') {
+      payload.output_config = { ...(payload.output_config || {}), effort: normalizeEffort(CONFIG.effort || 'max') };
+    } else {
+      delete payload.output_config;
+    }
 
     const bodyOut = JSON.stringify(payload);
-    log(`POST ${req.url} | model=${incomingModel}->${payload.model} | thinking=${payload.thinking.type} | effort=${payload.output_config.effort}`);
+    log(`POST ${req.url} | model=${incomingModel}->${payload.model} | thinking=${payload.thinking.type} | effort=${payload.output_config?.effort || 'off'}`);
 
     const headers = {};
     for (const [key, value] of Object.entries(req.headers)) {
@@ -151,5 +157,6 @@ server.on('error', err => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  log(`代理启动 localhost:${PORT} model=${CONFIG.model || 'deepseek-v4-pro'} thinking=${normalizeThinking(CONFIG.thinking || 'enabled')} effort=${normalizeEffort(CONFIG.effort || 'max')}`);
+  const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
+  log(`代理启动 localhost:${PORT} model=${CONFIG.model || 'deepseek-v4-pro'} thinking=${thinking} effort=${thinking === 'enabled' ? normalizeEffort(CONFIG.effort || 'max') : 'off'}`);
 });

@@ -7,16 +7,16 @@
 
 ## 2. 执行命令与结果
 - `npm test`
-  - result：12 passed, 0 failed
+  - result：15 passed, 0 failed
 - `for f in cli.js proxy/proxy.js src/*.js test.js; do node --check "$f" || exit 1; done`
   - result：passed
 - `npm pack --dry-run`
   - result：passed，tarball 包含 13 个文件
 
 ## 3. 分层覆盖结果
-- Unit：6/6
-- Integration：5/5
-- E2E：1/1
+- Unit：7/7
+- Integration：6/6
+- E2E：2/2
 
 ## 4. 失败用例
 - 无

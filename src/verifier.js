@@ -39,13 +39,17 @@ function checkApiKey(apiKey) {
 
 function verify(config = {}) {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
+    const thinking = config.thinking === 'disabled' ? 'disabled' : 'enabled';
+    const payload = {
       model: config.model || 'deepseek-v4-pro',
       max_tokens: 64,
       messages: [{ role: 'user', content: 'ping' }],
-      thinking: { type: 'enabled', budget_tokens: 32768 },
-      output_config: { effort: config.effort || 'max' },
-    });
+      thinking: { type: thinking, budget_tokens: 32768 },
+    };
+    if (thinking === 'enabled') {
+      payload.output_config = { effort: config.effort || 'max' };
+    }
+    const body = JSON.stringify(payload);
 
     const req = http.request({
       hostname: '127.0.0.1',

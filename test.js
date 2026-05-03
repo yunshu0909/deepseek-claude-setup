@@ -114,6 +114,7 @@ async function run() {
   const cfg = {
     apiKey: 'sk-test-key',
     model: 'deepseek-v4-flash',
+    thinking: 'enabled',
     effort: 'high',
   };
 
@@ -158,6 +159,14 @@ async function run() {
     assert.strictEqual(fallbackRestored.env.ANTHROPIC_AUTH_TOKEN, cfg.apiKey);
     assert.strictEqual(fallbackRestored.env.ANTHROPIC_MODEL, cfg.model);
   });
+  settingsPatcher.patch({ ...cfg, thinking: 'disabled' });
+  const thinkingOffSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+  check('writes disabled thinking mode without Claude effort forcing', () => {
+    assert.strictEqual(thinkingOffSettings.alwaysThinkingEnabled, false);
+    assert.strictEqual(thinkingOffSettings.env.CLAUDE_CODE_EFFORT_LEVEL, undefined);
+    assert.strictEqual(thinkingOffSettings.effortLevel, undefined);
+  });
+  settingsPatcher.restore();
 
   console.log('\n-- proxy injection --');
   const upstream = await makeUpstream();
@@ -203,6 +212,35 @@ async function run() {
   } finally {
     await proxyManager.stop();
     await new Promise(resolve => upstream.server.close(resolve));
+  }
+
+  console.log('\n-- proxy thinking disabled --');
+  const upstreamOff = await makeUpstream();
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(upstreamOff.port);
+  configStore.write({ ...cfg, thinking: 'disabled', effort: 'max' });
+  await proxyManager.start();
+  try {
+    const health = await proxyManager.getHealth();
+    check('reports disabled thinking mode through health check', () => {
+      assert.strictEqual(health.thinking, 'disabled');
+      assert.strictEqual(health.effort, null);
+    });
+
+    await requestJson(proxyPort, '/v1/messages', {
+      model: 'deepseek-v4-pro',
+      max_tokens: 32,
+      messages: [{ role: 'user', content: 'ping' }],
+      thinking: { type: 'enabled', budget_tokens: 32768 },
+      output_config: { effort: 'max' },
+    });
+
+    check('disables thinking and removes output_config when configured off', () => {
+      assert.deepStrictEqual(upstreamOff.calls[0].body.thinking, { type: 'disabled', budget_tokens: 32768 });
+      assert.strictEqual(upstreamOff.calls[0].body.output_config, undefined);
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(resolve => upstreamOff.server.close(resolve));
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
