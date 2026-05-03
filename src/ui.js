@@ -125,7 +125,7 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher, 
 
     intro(`🔧 DeepSeek × Claude Code`);
     note(
-      `状态: ${statusIcon} ${statusText}\n模型: ${config.model}  |  思考模式: ${thinkingText}\nCodex: ${codexPatched ? '已接入 (codex -p deepseek)' : '未接入'}\n${running ? '代理: localhost:17861' : ''}`
+      `状态: ${statusIcon} ${statusText}\n模型: ${config.model}  |  思考模式: ${thinkingText}\nCodex: ${codexPatched ? '已接入 (直接 codex 即可使用)' : '未接入'}\n${running ? '代理: localhost:17861' : ''}`
     );
 
     const options = [];
@@ -156,6 +156,13 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher, 
     if (choice === 'start') {
       await doStart(config, proxyManager, launchdManager, settingsPatcher);
     } else if (choice === 'stop') {
+      if (codexPatcher && codexPatched) {
+        const ok = await confirm({
+          message: '关闭代理也会关闭 Codex 接入（codex 将恢复使用 OpenAI）。确认关闭？',
+          initialValue: true,
+        });
+        if (!ok || isCancel(ok)) continue;
+      }
       await doStop(proxyManager, launchdManager, settingsPatcher);
       if (codexPatched) codexPatcher.restore();
     } else if (choice === 'reconfig') {
@@ -179,12 +186,16 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher, 
       }
       if (codexPatched) codexPatcher.patch(config);
     } else if (choice === 'enable-codex') {
-      await doStart(config, proxyManager, launchdManager, settingsPatcher, { patchClaude: false });
+      const started = await doStart(config, proxyManager, launchdManager, settingsPatcher, { patchClaude: false });
+      if (started === false) {
+        note('❌ 代理启动失败，Codex 配置未写入');
+        continue;
+      }
       codexPatcher.patch(config);
-      note('✅ Codex 已接入。使用：codex -p deepseek');
+      note('✅ Codex 已接入，直接 codex 即可使用 DeepSeek\n   💡 临时使用 OpenAI：codex -p openai');
     } else if (choice === 'disable-codex') {
       codexPatcher.restore();
-      note('✅ Codex 接入已关闭，默认 Codex 配置不受影响');
+      note('✅ Codex 接入已关闭，codex 恢复使用默认配置');
     } else if (choice === 'fix') {
       if (running) {
         // 进程在但配置没改
@@ -244,7 +255,9 @@ async function doStart(config, proxyManager, launchdManager, settingsPatcher, op
     try { await proxyManager.stop(); } catch {}
     try { settingsPatcher.restore(); } catch {}
     try { launchdManager.uninstall(); } catch {}
+    return false;
   }
+  return true;
 }
 
 async function doStop(proxyManager, launchdManager, settingsPatcher) {

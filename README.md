@@ -25,7 +25,7 @@ npx -y github:yunshu0909/deepseek-claude-setup
 - **开启代理** — 一键部署代理 + 修改 settings.json + 注册开机自启
 - **关闭代理** — 一键还原所有配置
 - **开启/关闭思考模式** — 主面板一键切换，运行中自动重启代理生效
-- **开启/关闭 Codex 接入** — 为 Codex CLI 写入 `profiles.deepseek`，不覆盖默认 Codex 配置
+- **开启/关闭 Codex 接入** — 接管 Codex 默认 profile，开启后直接 `codex` 即可使用 DeepSeek（不加 `-p`），关闭后还原
 - **修改配置** — 更改模型、思考模式或思考深度（运行中自动重启代理）
 
 ## 原理
@@ -60,15 +60,16 @@ Codex CLI → localhost:17861/v1/responses (代理) → api.deepseek.com/chat/co
 
 ## Codex CLI
 
-在主面板选择「开启 Codex 接入」后，工具会在 `~/.codex/config.toml` 追加一个受管理的 profile：
+在主面板选择「开启 Codex 接入」后，工具会接管 `~/.codex/config.toml` 的默认 profile，开启后直接 `codex` 即可使用 DeepSeek：
 
 ```bash
-codex -p deepseek
+codex  # 无需 -p 参数，直接走 DeepSeek
+codex -p openai  # 临时使用 OpenAI
 ```
 
-它不会覆盖默认 `codex` 配置。关闭 Codex 接入时，只移除工具写入的 managed block。
+原始默认配置备份到 `.deepseek-backup` 文件。关闭 Codex 接入时，一键还原原始配置。
 
-当前 Codex 接入支持普通文本会话和基础 function tools 转发；复杂工具调用、多轮 tool-call 回填仍建议先小范围验证。
+支持普通文本会话和 function tools 的真流式逐字输出。
 
 ## 测试
 

@@ -44,40 +44,6 @@ function sendSse(res, event) {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
-function responseMessageEvents(text, model) {
-  const now = Math.floor(Date.now() / 1000);
-  const responseId = `resp_${Date.now()}`;
-  const messageId = `msg_${Date.now()}`;
-  const item = {
-    id: messageId,
-    type: 'message',
-    status: 'completed',
-    role: 'assistant',
-    content: [{ type: 'output_text', text, annotations: [] }],
-  };
-  const response = {
-    id: responseId,
-    object: 'response',
-    created_at: now,
-    status: 'completed',
-    model,
-    output: [item],
-    output_text: text,
-    usage: null,
-  };
-
-  return [
-    { type: 'response.created', response: { ...response, status: 'in_progress', output: [] } },
-    { type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress', content: [] } },
-    { type: 'response.content_part.added', output_index: 0, item_id: messageId, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } },
-    { type: 'response.output_text.delta', output_index: 0, item_id: messageId, content_index: 0, delta: text },
-    { type: 'response.output_text.done', output_index: 0, item_id: messageId, content_index: 0, text },
-    { type: 'response.content_part.done', output_index: 0, item_id: messageId, content_index: 0, part: item.content[0] },
-    { type: 'response.output_item.done', output_index: 0, item },
-    { type: 'response.completed', response },
-  ];
-}
-
 function contentToText(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -105,49 +71,150 @@ function responsesToolsToChatTools(tools) {
   if (!Array.isArray(tools)) return undefined;
   const functions = tools
     .filter(tool => tool.type === 'function' && tool.name)
-    .map(tool => ({
-      type: 'function',
-      function: {
-        name: tool.name,
-        description: tool.description || '',
-        parameters: tool.parameters || { type: 'object', properties: {} },
-      },
-    }));
+    .map(tool => {
+      const params = {};
+      for (const [k, v] of Object.entries(tool.parameters || { type: 'object', properties: {} })) {
+        if (k === 'additionalProperties' || k === 'strict') continue; // DeepSeek 不接受
+        params[k] = v;
+      }
+      return {
+        type: 'function',
+        function: {
+          name: tool.name,
+          description: tool.description || '',
+          parameters: params,
+        },
+      };
+    });
   return functions.length ? functions : undefined;
 }
 
-function writeResponsesFromText(res, payload, text) {
-  if (payload.stream === false) {
-    const events = responseMessageEvents(text, payload.model);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(events.at(-1).response));
-    return;
-  }
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-  for (const event of responseMessageEvents(text, payload.model)) sendSse(res, event);
-  res.end();
-}
+function streamChatToResponses(res, chatPayload, originalPayload, streamMode) {
+  const responseId = `resp_${Date.now()}`;
+  const now = Math.floor(Date.now() / 1000);
+  let outputIndex = 0;
+  let streamTerminated = false;
+  let phase = 'start'; // start | reasoning | text | tool_call | completed
+  let currentItem = null; // { id, type, output_index, content_index, text }
+  const outputItems = [];
+  let responseUsage = null;
 
-function handleResponses(req, res, payload) {
-  const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
-  const body = {
-    model: CONFIG.model || payload.model || 'deepseek-v4-pro',
-    messages: responsesInputToMessages(payload),
-    stream: true,
-    thinking: { type: thinking },
-  };
-  const tools = responsesToolsToChatTools(payload.tools);
-  if (tools) body.tools = tools;
-  if (thinking === 'enabled') {
-    body.output_config = { effort: normalizeEffort(CONFIG.effort || 'max') };
+  function emit(event) {
+    if (streamMode === 'stream') sendSse(res, event);
+    return event;
   }
 
-  const bodyOut = JSON.stringify(body);
-  const headers = {
+  function emitCreated() {
+    phase = 'in_progress';
+    const response = {
+      id: responseId, object: 'response', created_at: now, status: 'in_progress',
+      model: chatPayload.model, output: [],
+    };
+    emit({ type: 'response.created', response });
+    emit({ type: 'response.in_progress', response: { ...response } });
+    return response;
+  }
+
+  function startItem(itemType, extra = {}) {
+    // 关闭当前 item（如有）
+    if (currentItem && !currentItem.closed) closeItem();
+
+    const itemId = `msg_${Date.now()}_${outputIndex}`;
+    currentItem = { id: itemId, type: itemType, output_index: outputIndex, content_index: 0, text: '', closed: false };
+    const item = { id: itemId, type: itemType, status: 'in_progress', role: 'assistant', content: [], ...extra };
+    emit({ type: 'response.output_item.added', output_index: outputIndex, item });
+    if (itemType === 'message') {
+      const part = { type: 'output_text', text: '', annotations: [] };
+      emit({ type: 'response.content_part.added', output_index: outputIndex, item_id: itemId, content_index: 0, part });
+    } else if (itemType === 'reasoning') {
+      const part = { type: 'reasoning_text', text: '', annotations: [] };
+      emit({ type: 'response.content_part.added', output_index: outputIndex, item_id: itemId, content_index: 0, part });
+    }
+    return currentItem;
+  }
+
+  function emitDelta(deltaText) {
+    if (!currentItem) startItem('message');
+    currentItem.text += deltaText;
+    const eventType = currentItem.type === 'reasoning' ? 'response.reasoning_text.delta' : 'response.output_text.delta';
+    emit({ type: eventType, output_index: currentItem.output_index, item_id: currentItem.id, content_index: 0, delta: deltaText });
+  }
+
+  function closeItem() {
+    if (!currentItem || currentItem.closed) return;
+    currentItem.closed = true;
+    const { id, type, output_index, text } = currentItem;
+
+    if (type === 'message') {
+      emit({ type: 'response.output_text.done', output_index, item_id: id, content_index: 0, text });
+      const part = { type: 'output_text', text, annotations: [] };
+      emit({ type: 'response.content_part.done', output_index, item_id: id, content_index: 0, part });
+    } else if (type === 'reasoning') {
+      emit({ type: 'response.reasoning_text.done', output_index, item_id: id, content_index: 0, text });
+      const part = { type: 'reasoning_text', text, annotations: [] };
+      emit({ type: 'response.content_part.done', output_index, item_id: id, content_index: 0, part });
+    }
+
+    const item = { id, type, status: 'completed', role: 'assistant', content: [{ type: type === 'reasoning' ? 'reasoning_text' : 'output_text', text, annotations: [] }] };
+    emit({ type: 'response.output_item.done', output_index, item });
+    outputItems.push(item);
+    outputIndex++;
+    currentItem = null;
+  }
+
+  function emitToolCall(name, args) {
+    if (currentItem && !currentItem.closed) closeItem();
+    const itemId = `fc_${Date.now()}_${outputIndex}`;
+    const item = { id: itemId, type: 'function_call', name, status: 'in_progress', arguments: '' };
+    emit({ type: 'response.output_item.added', output_index: outputIndex, item });
+    // 逐字符发 arguments delta（模拟流式）
+    emit({ type: 'response.function_call_arguments.delta', output_index: outputIndex, item_id: itemId, delta: args });
+    const doneItem = { id: itemId, type: 'function_call', name, status: 'completed', arguments: args };
+    emit({ type: 'response.function_call_arguments.done', output_index: outputIndex, item_id: itemId, name, arguments: args });
+    emit({ type: 'response.output_item.done', output_index: outputIndex, item: doneItem });
+    outputItems.push(doneItem);
+    outputIndex++;
+  }
+
+  function emitCompleted() {
+    if (streamTerminated) return;
+    streamTerminated = true;
+    if (currentItem && !currentItem.closed) closeItem();
+    const response = {
+      id: responseId, object: 'response', created_at: now, status: 'completed',
+      model: chatPayload.model, output: outputItems,
+      output_text: outputItems.filter(it => it.type === 'message').map(it => it.content[0]?.text || '').join(''),
+      usage: responseUsage,
+    };
+    if (streamMode === 'json') {
+      const body = JSON.stringify(response);
+      if (!res.headersSent) res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+      res.end(body);
+    } else {
+      emit({ type: 'response.completed', response });
+      res.end();
+    }
+  }
+
+  function emitFailed(error) {
+    if (streamTerminated) return;
+    streamTerminated = true;
+    if (streamMode === 'stream' && !res.headersSent) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    }
+    if (streamMode === 'json') {
+      const body = JSON.stringify({ id: responseId, object: 'response', status: 'failed', error });
+      if (!res.headersSent) res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+      res.end(body);
+    } else {
+      emit({ type: 'response.failed', response: { id: responseId, object: 'response', status: 'failed', error } });
+      res.end();
+    }
+  }
+
+  // --- main ---
+  const bodyOut = JSON.stringify(chatPayload);
+  const reqHeaders = {
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(bodyOut),
     Authorization: `Bearer ${CONFIG.apiKey}`,
@@ -159,40 +226,121 @@ function handleResponses(req, res, payload) {
     port: TARGET_PORT,
     path: `${OPENAI_TARGET_PATH_PREFIX}/chat/completions`,
     method: 'POST',
-    headers,
+    headers: reqHeaders,
     rejectUnauthorized: process.env.DEEPSEEK_CLAUDE_STRICT_TLS === '1',
   }, upstreamRes => {
-    let collected = '';
+    if (streamMode === 'stream') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    }
+
+    emitCreated();
+
+    if (upstreamRes.statusCode && upstreamRes.statusCode >= 400) {
+      let errBody = '';
+      upstreamRes.setEncoding('utf8');
+      upstreamRes.on('data', c => { errBody += c; });
+      upstreamRes.on('end', () => emitFailed({ code: 'upstream_error', message: errBody || `Upstream HTTP ${upstreamRes.statusCode}` }));
+      return;
+    }
+
+    let lineBuf = '';
+    let tcName = null;
+    let tcArgs = '';
     upstreamRes.setEncoding('utf8');
     upstreamRes.on('data', chunk => {
-      for (const line of chunk.split(/\r?\n/)) {
+      if (streamTerminated) return;
+      lineBuf += chunk;
+      const lines = lineBuf.split(/\r?\n/);
+      lineBuf = lines.pop();
+      for (const line of lines) {
+        if (streamTerminated) return;
         if (!line.startsWith('data:')) continue;
         const data = line.slice(5).trim();
         if (!data || data === '[DONE]') continue;
         try {
           const parsed = JSON.parse(data);
-          const delta = parsed.choices?.[0]?.delta;
-          if (delta?.reasoning_content) collected += delta.reasoning_content;
-          if (delta?.content) collected += delta.content;
+          const choice = parsed.choices?.[0];
+          const delta = choice?.delta;
+          if (!delta) continue;
+
+          // reasoning
+          if (delta.reasoning_content) {
+            if (phase !== 'reasoning') { startItem('reasoning'); phase = 'reasoning'; }
+            emitDelta(delta.reasoning_content);
+          }
+
+          // tool calls
+          if (delta.tool_calls) {
+            const tc = delta.tool_calls[0];
+            if (tc) {
+              if (phase !== 'tool_call') { if (currentItem && !currentItem.closed) closeItem(); phase = 'tool_call'; }
+              if (tc.function?.name) { tcName = tc.function.name; tcArgs = ''; }
+              if (tc.function?.arguments) tcArgs += tc.function.arguments;
+            }
+          }
+
+          // text content (not tool call related)
+          if (delta.content && phase !== 'tool_call') {
+            if (phase === 'reasoning') { closeItem(); }
+            if (phase !== 'text') { startItem('message'); phase = 'text'; }
+            emitDelta(delta.content);
+          }
+
+          // finish
+          if (choice.finish_reason) {
+            if (choice.finish_reason === 'tool_calls' && tcName) {
+              emitToolCall(tcName, tcArgs);
+              tcName = null; tcArgs = '';
+            }
+            if (currentItem && !currentItem.closed) closeItem();
+          }
+
+          // usage
+          if (parsed.usage) responseUsage = parsed.usage;
         } catch {}
       }
     });
+
     upstreamRes.on('end', () => {
-      if (upstreamRes.statusCode && upstreamRes.statusCode >= 400) {
-        res.writeHead(upstreamRes.statusCode, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: collected || `Upstream HTTP ${upstreamRes.statusCode}` } }));
-        return;
-      }
-      writeResponsesFromText(res, { ...payload, model: body.model }, collected || '');
+      if (!streamTerminated) emitCompleted();
+    });
+
+    upstreamRes.on('error', err => {
+      if (!streamTerminated) emitFailed({ code: 'stream_error', message: err.message });
     });
   });
 
-  upstream.on('error', err => {
-    res.writeHead(502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: { message: err.message } }));
+  upstream.setTimeout(300000, () => {
+    upstream.destroy();
+    if (!streamTerminated) emitFailed({ code: 'timeout', message: 'upstream timeout after 300s' });
   });
+
+  upstream.on('error', err => {
+    log(`ERROR [responses]: ${err.message}`);
+    if (!streamTerminated) emitFailed({ code: 'connection_error', message: err.message });
+  });
+
   upstream.write(bodyOut);
   upstream.end();
+}
+
+function handleResponses(req, res, payload) {
+  const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
+  const body = {
+    model: CONFIG.model || payload.model || 'deepseek-v4-pro',
+    messages: responsesInputToMessages(payload),
+    stream: true,
+    stream_options: { include_usage: true },
+    thinking: { type: thinking },
+  };
+  const tools = responsesToolsToChatTools(payload.tools);
+  if (tools) body.tools = tools;
+  if (thinking === 'enabled') {
+    body.output_config = { effort: normalizeEffort(CONFIG.effort || 'max') };
+  }
+
+  const streamMode = payload.stream !== false ? 'stream' : 'json';
+  streamChatToResponses(res, body, payload, streamMode);
 }
 
 let CONFIG;
