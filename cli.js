@@ -2,7 +2,7 @@
 const { intro, outro } = require('@clack/prompts');
 const configStore = require('./src/config-store');
 const proxyManager = require('./src/proxy-manager');
-const launchdManager = require('./src/launchd-manager');
+const autostart = require('./src/autostart');
 const settingsPatcher = require('./src/settings-patcher');
 const codexPatcher = require('./src/codex-patcher');
 const ui = require('./src/ui');
@@ -37,10 +37,10 @@ async function main() {
     const newCfg = await ui.configWizard(null);
     if (!newCfg) return;  // 用户取消
     // 配置完直接进主面板
-    await ui.mainPanel(newCfg, proxyManager, launchdManager, settingsPatcher, codexPatcher);
+    await ui.mainPanel(newCfg, proxyManager, autostart, settingsPatcher, codexPatcher);
   } else {
     // 已有配置 → 主面板
-    await ui.mainPanel(config, proxyManager, launchdManager, settingsPatcher, codexPatcher);
+    await ui.mainPanel(config, proxyManager, autostart, settingsPatcher, codexPatcher);
   }
 }
 

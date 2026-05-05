@@ -25,9 +25,12 @@ const TARGET_PROTOCOL = process.env.DEEPSEEK_CLAUDE_TARGET_PROTOCOL || 'https:';
 const PORT = process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? Number(process.env.DEEPSEEK_CLAUDE_PROXY_PORT) : 17861;
 const SERVICE_NAME = 'deepseek-claude-proxy';
 
+// 日志路径用 os.tmpdir() 跨平台（macOS: /var/folders/.../T/，Win: %TEMP%，Linux: /tmp/）
+const LOG_PATH = path.join(os.tmpdir(), 'deepseek-claude-proxy.log');
+
 function log(msg) {
   const ts = new Date().toISOString().slice(11, 19);
-  try { fs.appendFileSync('/tmp/deepseek-claude-proxy.log', `[${ts}] ${msg}\n`); } catch {}
+  try { fs.appendFileSync(LOG_PATH, `[${ts}] ${msg}\n`); } catch {}
 }
 
 function normalizeEffort(effort) {

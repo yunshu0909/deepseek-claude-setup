@@ -2,6 +2,7 @@ const { spawn } = require('child_process');
 const http = require('http');
 const path = require('path');
 const os = require('os');
+const autostart = require('./autostart');
 
 const CONFIG_DIR = process.env.DEEPSEEK_CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.deepseek-claude');
 const PROXY_SCRIPT = path.join(CONFIG_DIR, 'proxy.js');
@@ -63,14 +64,15 @@ async function start() {
   }
 
   return new Promise((resolve, reject) => {
+    // spawn 选项交由 autostart adapter 决定，避免在调用方写 process.platform 判断
     const child = spawn(process.execPath, [PROXY_SCRIPT], {
-      detached: true,
-      stdio: 'pipe',
+      ...autostart.getSpawnOptions(),
       env: process.env,
     });
 
+    // child.stderr 仅在 stdio:'pipe' 时存在；adapter 选 'ignore' 时为 null
     let stderr = '';
-    child.stderr.on('data', d => { stderr += d.toString(); });
+    if (child.stderr) child.stderr.on('data', d => { stderr += d.toString(); });
 
     child.on('exit', code => {
       if (code !== 0 && code !== null) {

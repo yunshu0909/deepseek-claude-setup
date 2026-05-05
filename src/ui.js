@@ -2,6 +2,27 @@ const { intro, outro, text, select, confirm, spinner, note, cancel, isCancel } =
 const configStore = require('./config-store');
 const verifier = require('./verifier');
 
+/**
+ * 跨平台终端 emoji 支持检测（PRD-003 §3.1）
+ *
+ * 正向检测 UTF-8 + TTY，不绑定 process.platform——让 Linux SSH / CI 等场景也能正确降级。
+ * Phase 1 仅定义函数，Phase 3 才实际用 I_EMOJI / I_ASCII 替换主面板字符。
+ *
+ * @returns {boolean} 当前终端是否支持 emoji 渲染
+ */
+function supportsEmoji() {
+  if (!process.stdout.isTTY) return false;
+  // 已知支持 UTF-8 的终端环境标识
+  if (process.env.WT_SESSION) return true;        // Windows Terminal
+  if (process.env.TERM_PROGRAM) return true;       // VSCode / iTerm / Apple_Terminal 都设此变量
+  if (process.env.MSYSTEM) return true;            // Git Bash (MinTTY)
+  // locale 显式声明 UTF-8
+  if (/UTF-?8/i.test(process.env.LANG || process.env.LC_ALL || '')) return true;
+  // 兜底：旧 cmd / PowerShell 5.1 默认 console 都不设以上任何标志 → 走 ASCII
+  return false;
+}
+module.exports.supportsEmoji = supportsEmoji;
+
 // 第一步：输入 API Key（带验证）
 async function stepApiKey(existing) {
   while (true) {
@@ -132,7 +153,7 @@ function deployProxyScript() {
  * - 用户不需要手动「关闭接入再重新开启」来升级
  * - 文件无变化时已运行的代理不动
  */
-async function ensureProxyRunning(config, proxyManager, launchdManager) {
+async function ensureProxyRunning(config, proxyManager, autostart) {
   const updated = deployProxyScript();
   const running = await proxyManager.isRunning();
   if (running && !updated) return false;
@@ -142,7 +163,7 @@ async function ensureProxyRunning(config, proxyManager, launchdManager) {
     await proxyManager.stop();
   }
   await proxyManager.start(config);
-  launchdManager.install();
+  autostart.install();
   return updated; // true 表示发生了升级
 }
 
@@ -150,31 +171,31 @@ async function ensureProxyRunning(config, proxyManager, launchdManager) {
  * 重启代理使新 config（model/thinking/effort）生效。代理只在启动时读 config.json 一次。
  * 同时会顺带带上最新 proxy.js
  */
-async function restartProxy(config, proxyManager, launchdManager) {
+async function restartProxy(config, proxyManager, autostart) {
   await proxyManager.stop();
   deployProxyScript();
   await proxyManager.start(config);
-  launchdManager.install();
+  autostart.install();
 }
 
 /**
  * 如果 Claude Code 与 Codex 两个接入都已关闭，停代理 + 卸 LaunchAgent
  * 否则保持代理运行（另一个接入还在用）
  */
-async function maybeStopProxy(proxyManager, launchdManager, settingsPatcher, codexPatcher) {
+async function maybeStopProxy(proxyManager, autostart, settingsPatcher, codexPatcher) {
   const claudeStill = settingsPatcher.isPatched();
   const codexStill = codexPatcher?.isPatched?.() || false;
   if (claudeStill || codexStill) return false;
-  launchdManager.uninstall();
+  autostart.uninstall();
   await proxyManager.stop();
   return true;
 }
 
-async function enableClaude(config, proxyManager, launchdManager, settingsPatcher) {
+async function enableClaude(config, proxyManager, autostart, settingsPatcher) {
   const s = spinner();
   try {
     s.start('正在接入 Claude Code...');
-    await ensureProxyRunning(config, proxyManager, launchdManager);
+    await ensureProxyRunning(config, proxyManager, autostart);
     s.message('✅ 代理已就绪');
     settingsPatcher.patch(config);
     s.message('✅ Claude Code 配置已修改');
@@ -193,24 +214,24 @@ async function enableClaude(config, proxyManager, launchdManager, settingsPatche
   }
 }
 
-async function disableClaude(proxyManager, launchdManager, settingsPatcher, codexPatcher) {
+async function disableClaude(proxyManager, autostart, settingsPatcher, codexPatcher) {
   const s = spinner();
   try {
     s.start('正在关闭 Claude Code 接入...');
     settingsPatcher.restore();
     s.message('✅ Claude Code 配置已还原');
-    const stopped = await maybeStopProxy(proxyManager, launchdManager, settingsPatcher, codexPatcher);
+    const stopped = await maybeStopProxy(proxyManager, autostart, settingsPatcher, codexPatcher);
     s.stop(stopped ? '✅ Claude Code 接入已关闭，代理已停止' : '✅ Claude Code 接入已关闭，代理仍为 Codex 服务');
   } catch (err) {
     s.stop(`❌ 关闭失败: ${err.message}`);
   }
 }
 
-async function enableCodex(config, proxyManager, launchdManager, codexPatcher) {
+async function enableCodex(config, proxyManager, autostart, codexPatcher) {
   const s = spinner();
   try {
     s.start('正在接入 Codex...');
-    await ensureProxyRunning(config, proxyManager, launchdManager);
+    await ensureProxyRunning(config, proxyManager, autostart);
     s.message('✅ 代理已就绪');
     codexPatcher.patch(config);
     s.stop('✅ Codex 已接入，直接执行 codex 即可使用 DeepSeek\n   💡 临时使用 OpenAI：codex -p openai');
@@ -222,13 +243,13 @@ async function enableCodex(config, proxyManager, launchdManager, codexPatcher) {
   }
 }
 
-async function disableCodex(proxyManager, launchdManager, settingsPatcher, codexPatcher) {
+async function disableCodex(proxyManager, autostart, settingsPatcher, codexPatcher) {
   const s = spinner();
   try {
     s.start('正在关闭 Codex 接入...');
     codexPatcher.restore();
     s.message('✅ Codex 配置已还原');
-    const stopped = await maybeStopProxy(proxyManager, launchdManager, settingsPatcher, codexPatcher);
+    const stopped = await maybeStopProxy(proxyManager, autostart, settingsPatcher, codexPatcher);
     s.stop(stopped ? '✅ Codex 接入已关闭，代理已停止' : '✅ Codex 接入已关闭，代理仍为 Claude Code 服务');
   } catch (err) {
     s.stop(`❌ 关闭失败: ${err.message}`);
@@ -239,7 +260,7 @@ async function disableCodex(proxyManager, launchdManager, settingsPatcher, codex
  * 主面板启动自检：代理在跑但 proxy.js 已升级时自动重启使用新代码。
  * 用户感知：执行 npx/node cli.js 进入主面板就用上最新版本，无需手动「关再开」
  */
-async function syncProxyOnStartup(config, proxyManager, launchdManager) {
+async function syncProxyOnStartup(config, proxyManager, autostart) {
   if (!await proxyManager.isRunning()) return false;
   const fs = require('fs');
   const path = require('path');
@@ -255,7 +276,7 @@ async function syncProxyOnStartup(config, proxyManager, launchdManager) {
   const s = spinner();
   s.start('检测到 proxy 已升级，正在重启代理使用最新代码...');
   try {
-    await restartProxy(config, proxyManager, launchdManager);
+    await restartProxy(config, proxyManager, autostart);
     s.stop('✅ 代理已升级到最新版');
   } catch (err) {
     s.stop(`⚠ 自动升级失败: ${err.message}（不影响现有功能）`);
@@ -264,8 +285,8 @@ async function syncProxyOnStartup(config, proxyManager, launchdManager) {
 }
 
 // 主面板
-async function mainPanel(config, proxyManager, launchdManager, settingsPatcher, codexPatcher) {
-  await syncProxyOnStartup(config, proxyManager, launchdManager);
+async function mainPanel(config, proxyManager, autostart, settingsPatcher, codexPatcher) {
+  await syncProxyOnStartup(config, proxyManager, autostart);
   while (true) {
     config.thinking = config.thinking || 'enabled';
     const running = await proxyManager.isRunning();
@@ -312,19 +333,19 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher, 
     if (isCancel(choice) || choice === 'quit') break;
 
     if (choice === 'enable-claude') {
-      await enableClaude(config, proxyManager, launchdManager, settingsPatcher);
+      await enableClaude(config, proxyManager, autostart, settingsPatcher);
     } else if (choice === 'disable-claude') {
-      await disableClaude(proxyManager, launchdManager, settingsPatcher, codexPatcher);
+      await disableClaude(proxyManager, autostart, settingsPatcher, codexPatcher);
     } else if (choice === 'enable-codex') {
-      await enableCodex(config, proxyManager, launchdManager, codexPatcher);
+      await enableCodex(config, proxyManager, autostart, codexPatcher);
     } else if (choice === 'disable-codex') {
-      await disableCodex(proxyManager, launchdManager, settingsPatcher, codexPatcher);
+      await disableCodex(proxyManager, autostart, settingsPatcher, codexPatcher);
     } else if (choice === 'toggle-thinking') {
       config = { ...config, thinking: config.thinking === 'disabled' ? 'enabled' : 'disabled' };
       configStore.write(config);
       // 任一接入开启时重启代理使新配置生效；同时把当前 patched 项重新 patch（写入新 thinking 状态到 settings）
       if (anyEnabled) {
-        await restartProxy(config, proxyManager, launchdManager);
+        await restartProxy(config, proxyManager, autostart);
       }
       if (claudePatched) settingsPatcher.patch(config);
       if (codexPatched) codexPatcher.patch(config);
@@ -333,7 +354,7 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher, 
       const newCfg = await configWizard(config);
       if (newCfg) {
         if (anyEnabled) {
-          await restartProxy(newCfg, proxyManager, launchdManager);
+          await restartProxy(newCfg, proxyManager, autostart);
         }
         if (claudePatched) settingsPatcher.patch(newCfg);
         if (codexPatched) codexPatcher.patch(newCfg);
@@ -341,7 +362,7 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher, 
       }
     } else if (choice === 'fix') {
       // 接入开着但代理掉了：重启代理即可
-      await ensureProxyRunning(config, proxyManager, launchdManager);
+      await ensureProxyRunning(config, proxyManager, autostart);
       note('✅ 代理已重启');
     }
   }

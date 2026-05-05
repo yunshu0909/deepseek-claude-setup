@@ -2,7 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const CODEX_CONFIG_PATH = process.env.CODEX_CONFIG_PATH || path.join(os.homedir(), '.codex', 'config.toml');
+// CODEX_CONFIG_PATH（测试用）> CODEX_HOME（OpenAI 未来可能引入的环境变量）> 默认 ~/.codex
+const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+const CODEX_CONFIG_PATH = process.env.CODEX_CONFIG_PATH || path.join(CODEX_HOME, 'config.toml');
 // 用 127.0.0.1 而不是 localhost：proxy 只 bind v4，部分系统 localhost 解析为 ::1 会连不上
 const PROXY_URL = process.env.DEEPSEEK_CLAUDE_PROXY_URL
   || (process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? `http://127.0.0.1:${process.env.DEEPSEEK_CLAUDE_PROXY_PORT}` : 'http://127.0.0.1:17861');

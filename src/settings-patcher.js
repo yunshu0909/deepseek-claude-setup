@@ -2,7 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const SETTINGS_PATH = process.env.CLAUDE_SETTINGS_PATH || path.join(os.homedir(), '.claude', 'settings.json');
+// CLAUDE_SETTINGS_PATH（测试用）> CLAUDE_HOME（Anthropic 未来可能引入）> 默认 ~/.claude
+const CLAUDE_HOME = process.env.CLAUDE_HOME || path.join(os.homedir(), '.claude');
+const SETTINGS_PATH = process.env.CLAUDE_SETTINGS_PATH || path.join(CLAUDE_HOME, 'settings.json');
 // 用 127.0.0.1 而不是 localhost：proxy 只 bind v4，部分系统 localhost 解析为 ::1 会连不上
 const PROXY_URL = process.env.DEEPSEEK_CLAUDE_PROXY_URL
   || (process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? `http://127.0.0.1:${process.env.DEEPSEEK_CLAUDE_PROXY_PORT}` : 'http://127.0.0.1:17861');
