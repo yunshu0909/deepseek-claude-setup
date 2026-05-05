@@ -12,24 +12,32 @@ const ui = require('./src/ui');
 const pkg = require('./package.json');
 
 const REPO = 'yunshu0909/deepseek-claude-setup';
+// 当前测试期间用 windows-adapt 分支；合并 main 时改回 'main'
+const UPSTREAM_REF = 'windows-adapt';
 const SHA_CACHE = path.join(configStore.DIR, '.cli_sha');
 
 /**
- * 启动时异步检查 GitHub main 分支最新 commit，若与本地缓存的 SHA 不同
- * 则给出升级提示。1.5s 超时，无网时静默跳过。
+ * 启动时检查 GitHub 最新 commit，发现新版**自动**清 npx 缓存 + 重新 npx +
+ * 重启进程。用户感知：进入工具时短暂等待 1-2 秒，自动拉到最新版。
  *
- * 不破坏 npx 缓存机制（缓存的破坏由用户决定执行升级命令），仅做"提示"。
+ * 死锁防护：自动升级时给子进程设 DEEPSEEK_CLAUDE_SKIP_UPDATE=1 环境变量，
+ * 子进程跳过此检查，避免无限重启循环。
  *
- * @returns {Promise<void>} 永不抛错
+ * 1.5s 超时；无网络/API 失败/spawn 失败均静默 fallback，让当前版本继续跑。
+ *
+ * @returns {Promise<void>} 永不抛错；触发自动升级时不会 resolve（直接 process.exit）
  */
 function checkForUpdate() {
+  // 子进程或显式跳过：不再递归检查
+  if (process.env.DEEPSEEK_CLAUDE_SKIP_UPDATE) return Promise.resolve();
+
   return new Promise(resolve => {
     let cached = '';
     try { cached = fs.readFileSync(SHA_CACHE, 'utf-8').trim(); } catch {}
 
     const req = https.request({
       hostname: 'api.github.com',
-      path: `/repos/${REPO}/commits/main`,
+      path: `/repos/${REPO}/commits/${UPSTREAM_REF}`,
       method: 'GET',
       headers: { 'User-Agent': 'deepseek-claude-setup', 'Accept': 'application/vnd.github+json' },
       timeout: 1500,
@@ -42,25 +50,40 @@ function checkForUpdate() {
           const latest = j.sha || '';
           if (!latest) return resolve();
           if (cached && cached === latest) return resolve();
-          // 首次记录 SHA：不提示（避免新装用户误以为已经过期）
+          // 首次记录 SHA：不触发升级（避免新装用户误升级）
           if (!cached) {
             try { fs.mkdirSync(configStore.DIR, { recursive: true }); fs.writeFileSync(SHA_CACHE, latest); } catch {}
             return resolve();
           }
-          // 检测到新版
+          // 检测到新版 → 自动升级
           const short = latest.slice(0, 7);
           const subject = (j.commit?.message || '').split('\n')[0].slice(0, 60);
           console.log('');
-          console.log(`⚠ 检测到新版 ${short}: ${subject}`);
-          console.log(`  当前缓存版本：${cached.slice(0, 7)}`);
-          console.log(`  立即升级：`);
-          console.log(`    rm -rf ~/.npm/_npx && npx -y github:${REPO}`);
-          console.log(`    （Windows: rm -r "$HOME\\.npm\\_npx" -ErrorAction SilentlyContinue）`);
-          console.log(`  或继续使用当前版本 → 按回车进入主面板`);
+          console.log(`⏳ 检测到新版 ${short}: ${subject}`);
+          console.log(`   正在自动升级（清 npx 缓存 + 重新拉取最新代码）...`);
           console.log('');
-          // 写新 SHA 到缓存（让下次再有新提交才提示，避免重复打扰）
-          try { fs.writeFileSync(SHA_CACHE, latest); } catch {}
-          resolve();
+
+          // 清 npx 缓存
+          const npxCache = path.join(require('os').homedir(), '.npm', '_npx');
+          try { fs.rmSync(npxCache, { recursive: true, force: true }); } catch {}
+
+          // 同步 spawn 重新跑 npx，stdio:inherit 让用户看到下载/启动过程
+          // shell:true 跨 cmd/PowerShell/bash 通用；DEEPSEEK_CLAUDE_SKIP_UPDATE 防递归
+          const { spawnSync } = require('child_process');
+          const cmd = process.platform === 'win32'
+            ? `npx -y "github:${REPO}#${UPSTREAM_REF}"`
+            : `npx -y github:${REPO}#${UPSTREAM_REF}`;
+          const result = spawnSync(cmd, [], {
+            stdio: 'inherit',
+            shell: true,
+            env: { ...process.env, DEEPSEEK_CLAUDE_SKIP_UPDATE: '1' },
+          });
+
+          // 子进程成功才更新 cache（失败留下旧 cache，下次启动重试）
+          if (result.status === 0) {
+            try { fs.writeFileSync(SHA_CACHE, latest); } catch {}
+          }
+          process.exit(result.status || 0);
         } catch { resolve(); }
       });
     });
