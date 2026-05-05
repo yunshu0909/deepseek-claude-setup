@@ -21,7 +21,6 @@ function supportsEmoji() {
   // 兜底：旧 cmd / PowerShell 5.1 默认 console 都不设以上任何标志 → 走 ASCII
   return false;
 }
-module.exports.supportsEmoji = supportsEmoji;
 
 // 第一步：输入 API Key（带验证）
 async function stepApiKey(existing) {
@@ -405,4 +404,4 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
   return config;
 }
 
-module.exports = { configWizard, mainPanel };
+module.exports = { configWizard, mainPanel, supportsEmoji };

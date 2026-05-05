@@ -70,9 +70,8 @@ function checkForUpdate() {
           // 同步 spawn 重新跑 npx，stdio:inherit 让用户看到下载/启动过程
           // shell:true 跨 cmd/PowerShell/bash 通用；DEEPSEEK_CLAUDE_SKIP_UPDATE 防递归
           const { spawnSync } = require('child_process');
-          const cmd = process.platform === 'win32'
-            ? `npx -y "github:${REPO}#${UPSTREAM_REF}"`
-            : `npx -y github:${REPO}#${UPSTREAM_REF}`;
+          // 跨平台都用引号包 ref，Windows cmd/PS 把 # 当注释起始，加引号永远安全
+          const cmd = `npx -y "github:${REPO}#${UPSTREAM_REF}"`;
           const result = spawnSync(cmd, [], {
             stdio: 'inherit',
             shell: true,
