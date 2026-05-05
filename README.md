@@ -28,15 +28,7 @@ npx -y github:yunshu0909/deepseek-claude-setup
 
 **首次运行**：拉到 GitHub 最新版，进配置向导（输入 DeepSeek API Key → 选模型 → 选思考模式 → 选思考深度），然后进主面板。
 
-**已经装过的用户**：本工具会自动检测 `proxy.js` 升级并热加载（v1.3.6+）。但 `cli.js`（交互壳）受 npx 缓存影响。要强制拉最新 cli.js：
-
-```bash
-# 清 npx 缓存
-rm -rf ~/.npm/_npx && npx -y github:yunshu0909/deepseek-claude-setup
-
-# 或显式指定最新 tag
-npx -y github:yunshu0909/deepseek-claude-setup#v1.3.7
-```
+**已经装过的用户**（v1.4.0+）：每次启动自动检测 GitHub 最新 release——发现新版本就自动清 `~/.npm/_npx` 缓存 + 重新 `npx` + 重启进程，**无需手动操作**。`proxy.js` 同样会被检测内容变化并热重启代理。
 
 ---
 
@@ -156,23 +148,38 @@ output_item.added → content_part.added → *.delta+ → *.done → content_par
 
 ### `~/.codex/config.toml`（开启 Codex 接入时）
 
-接管 `[profiles.default]` 让 `codex` 直接走 DeepSeek（不加 `-p` 参数）。原始 default profile 备份到注释 + `~/.codex/config.toml.deepseek-backup`，双保险还原。
+接管 `[profiles.default]` 让 `codex` 直接走 DeepSeek（不加 `-p` 参数）。**同时还会写入顶层 `model` / `model_reasoning_effort` / `model_provider` 三个键**——因为 codex 0.128 在 ChatGPT 账号登录态下，顶层 `model_provider` 才是路由的决定性字段，`[profiles.default]` 在登录态下是次要建议会被无视（Mac/Windows 实战均遇到，v1.3.7 修复）。原始 default profile + 顶层值都备份到 managed block 注释 + `~/.codex/config.toml.deepseek-backup`，双保险还原。
 
 ```toml
+model = "deepseek-v4-pro"
+model_reasoning_effort = "xhigh"
+model_provider = "deepseek_local"
+
 # >>> deepseek-claude-setup codex
 [model_providers.deepseek_local]
 name = "DeepSeek Local Proxy"
 base_url = "http://127.0.0.1:17861/v1"
 wire_api = "responses"
 experimental_bearer_token = "<DeepSeek API Key>"
-...
+request_max_retries = 0
+stream_max_retries = 0
+stream_idle_timeout_ms = 600000
+
+# --- original default profile ---
+# [top-level]
+# model = "<原顶层 model 备份>"
+# [profiles.default]
+# (none)
+# --- end original ---
 
 [profiles.default]
 model_provider = "deepseek_local"
 model = "deepseek-v4-pro"
-model_reasoning_effort = "max"
+model_reasoning_effort = "xhigh"
 # <<< deepseek-claude-setup codex
 ```
+
+> 思考强度映射：UI 选 `max` → 写 `xhigh`（DeepSeek 真实最高档），UI 选 `high` → 写 `high`，思考关闭 → 写 `minimal`。
 
 ```bash
 codex                # 无需 -p，直接走 DeepSeek
@@ -217,7 +224,7 @@ MSG_DONE model=deepseek-v4-pro thinking=Y(982chars) text=240chars stream=true us
 npm test
 ```
 
-57 个自动化用例（v1.3.6 当前数）覆盖：配置存储、settings/codex 文件 patch/restore、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试。
+57 个自动化用例（v1.4.0 当前数）覆盖：配置存储、settings/codex 文件 patch/restore、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、跨平台 autostart 抽象（macOS launchd / Windows schtasks）。
 
 测试使用临时目录 + 本地假 DeepSeek 上游，**不调用真实 API，不修改真实 `~/.claude` / `~/.codex`**。
 
@@ -227,12 +234,14 @@ npm test
 
 ## 系统要求
 
-- **仅支持 macOS**（LaunchAgent 强绑定 launchctl）
+- **macOS**（开机自启走 launchd LaunchAgent）
+- **Windows 10/11**（开机自启走 schtasks `/SC ONLOGON`，失败时降级到 Startup 文件夹的 `.vbs`）
+- Linux 代理本身能跑，但开机自启静默 no-op（用户需自行配置 systemd unit）
 - Node.js >= 16
 - Claude Code 已安装（仅 Claude Code 接入需要）
 - Codex CLI 已安装（仅 Codex 接入需要）
 
-> Linux / Windows 当前**不能用**——代理本身能跑但开机自启失效，且 Windows 上会创建无效的 `~/Library/LaunchAgents/` 文件夹。跨平台支持在路线图里（PRD-003）。
+> 跨平台抽象在 `src/autostart/{darwin,win32,linux}.js`，调用方零 `process.platform` 分支（PRD-003 已交付，v1.3.x）。Mac 与 Windows UX 完全一致。
 
 ---
 
@@ -240,15 +249,15 @@ npm test
 
 ### 升级
 
-最简单：
-
 ```bash
 npx -y github:yunshu0909/deepseek-claude-setup
 ```
 
-进主面板会自动检测 `proxy.js` 升级并重启代理。如果 `cli.js` 自身也想用最新版（修了主面板交互逻辑时），先 `rm -rf ~/.npm/_npx`。
+v1.4.0+ 启动时自动比对 GitHub 最新 release：发现新版本就自动 `rm -rf ~/.npm/_npx` 后重新 npx + 重启进程，**无需手动清缓存**。`proxy.js` 内容变化时主面板会热重启代理。
 
 ### 完全卸载
+
+工具里推荐先**关闭两个接入开关**（自动还原 settings.json / config.toml + 注销 LaunchAgent），再清残留：
 
 ```bash
 # macOS
@@ -257,19 +266,28 @@ launchctl unload ~/Library/LaunchAgents/com.deepseek.claude-proxy.plist 2>/dev/n
 rm -f ~/Library/LaunchAgents/com.deepseek.claude-proxy.plist
 pkill -f "deepseek-claude/proxy.js"
 rm -rf ~/.deepseek-claude
+
+# Windows (PowerShell)
+schtasks /Delete /TN "DeepSeekClaudeProxy" /F 2>$null
+Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\deepseek-claude-proxy.vbs" -ErrorAction SilentlyContinue
+Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*deepseek-claude*" } | Stop-Process -Force
+Remove-Item -Recurse -Force "$env:USERPROFILE\.deepseek-claude"
 ```
 
-然后手动还原 `~/.claude/settings.json` 和 `~/.codex/config.toml`（如果之前开启过对应接入），或从 `.deepseek-backup` 备份文件复制回来。
+如果跳过了开关直接清文件，从 `.deepseek-backup` 备份手动还原 `~/.claude/settings.json` 和 `~/.codex/config.toml`。
 
 ---
 
 ## 路线图
 
-按优先级（不乱序）：
+已完成：
 
-1. **跨平台适配（PRD-003）** — 抽象启动管理（macOS launchd / Linux systemd user unit / Windows Task Scheduler），去掉 `~/Library/LaunchAgents/` 这种 macOS-only 路径假设
-2. **多 provider 支持（PRD-004）** — 输入 API Key 一键接入 Qwen / Kimi / 智谱 / 阶跃 / MiniMax 等国产模型；引入 provider 抽象层
-3. **自更新（PRD-005）** — cli.js 启动时检查 GitHub release 自动升级，彻底消除 npx 缓存影响
+- ✅ **跨平台适配（PRD-003，v1.3.x）** — `src/autostart/` 抽象 macOS launchd / Windows schtasks+Startup .vbs / Linux 静默 no-op，调用方零 `process.platform` 分支，Mac/Win UX 一致
+- ✅ **真·自更新（PRD-005，v1.4.0）** — cli.js 启动检测 GitHub 最新 release，发现新版自动清 `~/.npm/_npx` + 重新 npx + 重启进程（用 `DEEPSEEK_CLAUDE_SKIP_UPDATE` 环境变量防死循环）
+
+下一步：
+
+- **多 provider 支持（PRD-004）** — 输入 API Key 一键接入 Qwen / Kimi / 智谱 / 阶跃 / MiniMax 等国产模型；引入 provider 抽象层与统一思考字段映射
 
 ---
 
