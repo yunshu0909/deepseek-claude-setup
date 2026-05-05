@@ -22,11 +22,12 @@ npx -y github:yunshu0909/deepseek-claude-setup
 
 首次运行进入配置向导（输入 API Key、选模型、选思考模式、选思考深度），之后进入主面板：
 
-- **开启代理** — 一键部署代理 + 修改 settings.json + 注册开机自启
-- **关闭代理** — 一键还原所有配置
-- **开启/关闭思考模式** — 主面板一键切换，运行中自动重启代理生效
-- **开启/关闭 Codex 接入** — 接管 Codex 默认 profile，开启后直接 `codex` 即可使用 DeepSeek（不加 `-p`），关闭后还原
+- **开启/关闭 Claude Code 接入** — 修改 `~/.claude/settings.json` 让 Claude Code 走代理；与 Codex 接入互相独立
+- **开启/关闭 Codex 接入** — 接管 `~/.codex/config.toml` 默认 profile，开启后直接 `codex` 即可使用 DeepSeek（不加 `-p`）
+- **开启/关闭思考模式** — 主面板一键切换，运行中自动重启代理使新配置生效
 - **修改配置** — 更改模型、思考模式或思考深度（运行中自动重启代理）
+
+代理进程由两个接入的状态自动管理：任一接入开启时代理自动启动 + 注册 LaunchAgent 开机自启；两个接入都关闭时代理自动停止。
 
 ## 原理
 

@@ -103,43 +103,144 @@ async function configWizard(existing) {
   return cfg;
 }
 
+// 把代理脚本复制到 ~/.deepseek-claude/proxy.js（每次确保是当前包里的版本）
+function deployProxyScript() {
+  const fs = require('fs');
+  const path = require('path');
+  const src = path.join(__dirname, '..', 'proxy', 'proxy.js');
+  const dst = path.join(configStore.DIR, 'proxy.js');
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.copyFileSync(src, dst);
+}
+
+/**
+ * 确保代理在跑：如果已经在跑直接返回，否则启动 + 注册 LaunchAgent
+ */
+async function ensureProxyRunning(config, proxyManager, launchdManager) {
+  if (await proxyManager.isRunning()) return;
+  deployProxyScript();
+  await proxyManager.start(config);
+  launchdManager.install();
+}
+
+/**
+ * 重启代理使新配置（model/thinking/effort）生效。代理读 config.json 是启动时一次性的
+ */
+async function restartProxy(config, proxyManager, launchdManager) {
+  await proxyManager.stop();
+  deployProxyScript();
+  await proxyManager.start(config);
+  launchdManager.install();
+}
+
+/**
+ * 如果 Claude Code 与 Codex 两个接入都已关闭，停代理 + 卸 LaunchAgent
+ * 否则保持代理运行（另一个接入还在用）
+ */
+async function maybeStopProxy(proxyManager, launchdManager, settingsPatcher, codexPatcher) {
+  const claudeStill = settingsPatcher.isPatched();
+  const codexStill = codexPatcher?.isPatched?.() || false;
+  if (claudeStill || codexStill) return false;
+  launchdManager.uninstall();
+  await proxyManager.stop();
+  return true;
+}
+
+async function enableClaude(config, proxyManager, launchdManager, settingsPatcher) {
+  const s = spinner();
+  try {
+    s.start('正在接入 Claude Code...');
+    await ensureProxyRunning(config, proxyManager, launchdManager);
+    s.message('✅ 代理已就绪');
+    settingsPatcher.patch(config);
+    s.message('✅ Claude Code 配置已修改');
+    s.message('⏳ 验证连接...');
+    const result = await verifier.verify(config);
+    if (result.ok) {
+      s.stop('✅ Claude Code 已接入，下次启动 Claude Code 即可生效');
+    } else {
+      s.stop(`⚠ 已接入但验证失败: ${result.error}。请检查网络和 API Key`);
+    }
+    return true;
+  } catch (err) {
+    s.stop(`❌ Claude Code 接入失败: ${err.message}`);
+    try { settingsPatcher.restore(); } catch {}
+    return false;
+  }
+}
+
+async function disableClaude(proxyManager, launchdManager, settingsPatcher, codexPatcher) {
+  const s = spinner();
+  try {
+    s.start('正在关闭 Claude Code 接入...');
+    settingsPatcher.restore();
+    s.message('✅ Claude Code 配置已还原');
+    const stopped = await maybeStopProxy(proxyManager, launchdManager, settingsPatcher, codexPatcher);
+    s.stop(stopped ? '✅ Claude Code 接入已关闭，代理已停止' : '✅ Claude Code 接入已关闭，代理仍为 Codex 服务');
+  } catch (err) {
+    s.stop(`❌ 关闭失败: ${err.message}`);
+  }
+}
+
+async function enableCodex(config, proxyManager, launchdManager, codexPatcher) {
+  const s = spinner();
+  try {
+    s.start('正在接入 Codex...');
+    await ensureProxyRunning(config, proxyManager, launchdManager);
+    s.message('✅ 代理已就绪');
+    codexPatcher.patch(config);
+    s.stop('✅ Codex 已接入，直接执行 codex 即可使用 DeepSeek\n   💡 临时使用 OpenAI：codex -p openai');
+    return true;
+  } catch (err) {
+    s.stop(`❌ Codex 接入失败: ${err.message}`);
+    try { codexPatcher.restore(); } catch {}
+    return false;
+  }
+}
+
+async function disableCodex(proxyManager, launchdManager, settingsPatcher, codexPatcher) {
+  const s = spinner();
+  try {
+    s.start('正在关闭 Codex 接入...');
+    codexPatcher.restore();
+    s.message('✅ Codex 配置已还原');
+    const stopped = await maybeStopProxy(proxyManager, launchdManager, settingsPatcher, codexPatcher);
+    s.stop(stopped ? '✅ Codex 接入已关闭，代理已停止' : '✅ Codex 接入已关闭，代理仍为 Claude Code 服务');
+  } catch (err) {
+    s.stop(`❌ 关闭失败: ${err.message}`);
+  }
+}
+
 // 主面板
 async function mainPanel(config, proxyManager, launchdManager, settingsPatcher, codexPatcher) {
   while (true) {
     config.thinking = config.thinking || 'enabled';
     const running = await proxyManager.isRunning();
-    const patched = settingsPatcher.isPatched();
+    const claudePatched = settingsPatcher.isPatched();
     const codexPatched = codexPatcher?.isPatched?.() || false;
+    const anyEnabled = claudePatched || codexPatched;
     const thinkingText = config.thinking === 'disabled' ? '关闭' : `开启 (${config.effort})`;
 
-    // 状态判断
-    let statusIcon, statusText, anomaly = false;
-    if (running && patched) {
-      statusIcon = '🟢'; statusText = '运行中';
-    } else if (!running && !patched) {
-      statusIcon = '○'; statusText = '未运行';
-    } else {
-      statusIcon = '⚠'; statusText = '异常 — 状态不一致';
-      anomaly = true;
-    }
+    // 异常：有接入开启但代理没在跑（手动 kill 了代理或 LaunchAgent 没拉起来）
+    const anomaly = anyEnabled && !running;
 
-    intro(`🔧 DeepSeek × Claude Code`);
+    intro(`🔧 DeepSeek × Claude Code / Codex`);
+    const claudeLine = `Claude Code: ${claudePatched ? '🟢 已接入' : '○ 未接入'}`;
+    const codexLine = `Codex:       ${codexPatched ? '🟢 已接入 (直接 codex 即可使用)' : '○ 未接入'}`;
+    const proxyLine = anomaly
+      ? '代理:        ⚠ 接入已开但代理未运行'
+      : (running ? '代理:        🟢 127.0.0.1:17861' : '代理:        ○ 未运行');
     note(
-      `状态: ${statusIcon} ${statusText}\n模型: ${config.model}  |  思考模式: ${thinkingText}\nCodex: ${codexPatched ? '已接入 (直接 codex 即可使用)' : '未接入'}\n${running ? '代理: localhost:17861' : ''}`
+      `${claudeLine}\n${codexLine}\n${proxyLine}\n模型: ${config.model}  |  思考模式: ${thinkingText}`
     );
 
     const options = [];
-
     if (anomaly) {
-      options.push({ value: 'fix', label: '🔧 修复：重新同步状态' });
-    } else if (running) {
-      options.push({ value: 'stop', label: '■ 关闭代理' });
-    } else {
-      options.push({ value: 'start', label: '🚀 开启代理' });
+      options.push({ value: 'fix', label: '🔧 修复：重启代理' });
     }
     options.push({
-      value: 'toggle-thinking',
-      label: config.thinking === 'disabled' ? '🧠 开启思考模式' : '🧠 关闭思考模式',
+      value: claudePatched ? 'disable-claude' : 'enable-claude',
+      label: claudePatched ? '🤖 关闭 Claude Code 接入' : '🤖 开启 Claude Code 接入',
     });
     if (codexPatcher) {
       options.push({
@@ -147,137 +248,53 @@ async function mainPanel(config, proxyManager, launchdManager, settingsPatcher, 
         label: codexPatched ? '⌘ 关闭 Codex 接入' : '⌘ 开启 Codex 接入',
       });
     }
+    options.push({
+      value: 'toggle-thinking',
+      label: config.thinking === 'disabled' ? '🧠 开启思考模式' : '🧠 关闭思考模式',
+    });
     options.push({ value: 'reconfig', label: '⚙ 修改配置' });
     options.push({ value: 'quit', label: '✕ 退出' });
 
     const choice = await select({ message: '请选择操作', options });
     if (isCancel(choice) || choice === 'quit') break;
 
-    if (choice === 'start') {
-      await doStart(config, proxyManager, launchdManager, settingsPatcher);
-    } else if (choice === 'stop') {
-      if (codexPatcher && codexPatched) {
-        const ok = await confirm({
-          message: '关闭代理也会关闭 Codex 接入（codex 将恢复使用 OpenAI）。确认关闭？',
-          initialValue: true,
-        });
-        if (!ok || isCancel(ok)) continue;
-      }
-      await doStop(proxyManager, launchdManager, settingsPatcher);
-      if (codexPatched) codexPatcher.restore();
-    } else if (choice === 'reconfig') {
-      const newCfg = await configWizard(config);
-      if (newCfg) {
-        if (running) {
-          await doStop(proxyManager, launchdManager, settingsPatcher);
-          await doStart(newCfg, proxyManager, launchdManager, settingsPatcher);
-        }
-        if (codexPatched) codexPatcher.patch(newCfg);
-        config = newCfg;
-      }
+    if (choice === 'enable-claude') {
+      await enableClaude(config, proxyManager, launchdManager, settingsPatcher);
+    } else if (choice === 'disable-claude') {
+      await disableClaude(proxyManager, launchdManager, settingsPatcher, codexPatcher);
+    } else if (choice === 'enable-codex') {
+      await enableCodex(config, proxyManager, launchdManager, codexPatcher);
+    } else if (choice === 'disable-codex') {
+      await disableCodex(proxyManager, launchdManager, settingsPatcher, codexPatcher);
     } else if (choice === 'toggle-thinking') {
       config = { ...config, thinking: config.thinking === 'disabled' ? 'enabled' : 'disabled' };
       configStore.write(config);
-      if (running) {
-        await doStop(proxyManager, launchdManager, settingsPatcher);
-        await doStart(config, proxyManager, launchdManager, settingsPatcher);
-      } else {
-        note(`✅ 思考模式已${config.thinking === 'disabled' ? '关闭' : '开启'}`);
+      // 任一接入开启时重启代理使新配置生效；同时把当前 patched 项重新 patch（写入新 thinking 状态到 settings）
+      if (anyEnabled) {
+        await restartProxy(config, proxyManager, launchdManager);
       }
+      if (claudePatched) settingsPatcher.patch(config);
       if (codexPatched) codexPatcher.patch(config);
-    } else if (choice === 'enable-codex') {
-      const started = await doStart(config, proxyManager, launchdManager, settingsPatcher, { patchClaude: false });
-      if (started === false) {
-        note('❌ 代理启动失败，Codex 配置未写入');
-        continue;
+      note(`✅ 思考模式已${config.thinking === 'disabled' ? '关闭' : '开启'}`);
+    } else if (choice === 'reconfig') {
+      const newCfg = await configWizard(config);
+      if (newCfg) {
+        if (anyEnabled) {
+          await restartProxy(newCfg, proxyManager, launchdManager);
+        }
+        if (claudePatched) settingsPatcher.patch(newCfg);
+        if (codexPatched) codexPatcher.patch(newCfg);
+        config = newCfg;
       }
-      codexPatcher.patch(config);
-      note('✅ Codex 已接入，直接 codex 即可使用 DeepSeek\n   💡 临时使用 OpenAI：codex -p openai');
-    } else if (choice === 'disable-codex') {
-      codexPatcher.restore();
-      note('✅ Codex 接入已关闭，codex 恢复使用默认配置');
     } else if (choice === 'fix') {
-      if (running) {
-        // 进程在但配置没改
-        settingsPatcher.patch(config);
-        note('✅ 已修复：配置已指向代理');
-      } else {
-        await doStart(config, proxyManager, launchdManager, settingsPatcher);
-      }
+      // 接入开着但代理掉了：重启代理即可
+      await ensureProxyRunning(config, proxyManager, launchdManager);
+      note('✅ 代理已重启');
     }
   }
 
   outro('👋 再见');
   return config;
-}
-
-async function doStart(config, proxyManager, launchdManager, settingsPatcher, options = {}) {
-  const patchClaude = options.patchClaude !== false;
-  const s = spinner();
-  try {
-    s.start('正在部署...');
-
-    // Copy proxy script to ~/.deepseek-claude/
-    const fs = require('fs');
-    const path = require('path');
-    const src = path.join(__dirname, '..', 'proxy', 'proxy.js');
-    const dst = path.join(configStore.DIR, 'proxy.js');
-    fs.mkdirSync(path.dirname(dst), { recursive: true });
-    fs.copyFileSync(src, dst);
-
-    // Start proxy
-    await proxyManager.start(config);
-    s.message('✅ 代理进程已启动');
-
-    // LaunchAgent
-    launchdManager.install();
-    s.message('✅ 开机自启已注册');
-
-    if (patchClaude) {
-      settingsPatcher.patch(config);
-      s.message('✅ Claude Code 配置已修改');
-    }
-
-    if (patchClaude) {
-      s.message('⏳ 验证连接...');
-      const result = await verifier.verify(config);
-      if (result.ok) {
-        s.stop('✅ 全部完成！下次启动 Claude Code 即可生效');
-      } else {
-        s.stop(`⚠ 代理已部署但验证失败: ${result.error}。请检查网络和 API Key`);
-      }
-    } else {
-      s.stop('✅ 代理已就绪');
-    }
-  } catch (err) {
-    s.stop(`❌ 部署失败: ${err.message}`);
-    // 完整回滚
-    try { await proxyManager.stop(); } catch {}
-    try { settingsPatcher.restore(); } catch {}
-    try { launchdManager.uninstall(); } catch {}
-    return false;
-  }
-  return true;
-}
-
-async function doStop(proxyManager, launchdManager, settingsPatcher) {
-  const s = spinner();
-  try {
-    s.start('正在关闭...');
-
-    settingsPatcher.restore();
-    s.message('✅ Claude Code 配置已还原');
-
-    launchdManager.uninstall();
-    s.message('✅ 开机自启已取消');
-
-    await proxyManager.stop();
-    s.message('✅ 代理进程已停止');
-
-    s.stop('✅ 已关闭');
-  } catch (err) {
-    s.stop(`❌ 关闭失败: ${err.message}`);
-  }
 }
 
 module.exports = { configWizard, mainPanel };
