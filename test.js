@@ -649,9 +649,10 @@ async function run() {
     await new Promise(r => parallelUpstream.server.close(r));
   }
 
-  // reasoning 在普通 message 之前应该被丢弃（文档：无 tool_call 的 reasoning 会被忽略）
-  const reasonDropUpstream = await makeChatUpstream({ mode: 'text_only' });
-  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(reasonDropUpstream.port);
+  // reasoning 不附加给 user 消息；仅附加给 assistant（文档：无 tool_call 的 reasoning
+  // 传过去 DeepSeek 会忽略，所以无差别附加 assistant 是最安全的）
+  const reasonUserUpstream = await makeChatUpstream({ mode: 'text_only' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(reasonUserUpstream.port);
   configStore.write(cfg);
   await proxyManager.start();
   try {
@@ -663,14 +664,50 @@ async function run() {
       ],
       stream: true,
     });
-    const msgs = reasonDropUpstream.calls[0].body.messages;
-    check('reasoning before plain message (no tool_call) is dropped', () => {
-      const anyWithReasoning = msgs.find(m => m.reasoning_content);
-      assert.strictEqual(anyWithReasoning, undefined, 'no message should carry reasoning_content');
+    const msgs = reasonUserUpstream.calls[0].body.messages;
+    check('reasoning is NOT attached to user messages', () => {
+      const userMsg = msgs.find(m => m.role === 'user');
+      assert.ok(userMsg);
+      assert.strictEqual(userMsg.reasoning_content, undefined);
     });
   } finally {
     await proxyManager.stop();
-    await new Promise(resolve => reasonDropUpstream.server.close(resolve));
+    await new Promise(resolve => reasonUserUpstream.server.close(resolve));
+  }
+
+  // reasoning 应该附加给紧接的 assistant message（含工具调用轮次的最终回复，
+  // DeepSeek 文档：含工具调用的轮次中所有 assistant 的 reasoning_content 必须回传）
+  const reasonAsstUpstream = await makeChatUpstream({ mode: 'text_only' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(reasonAsstUpstream.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q' }] },
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'analyze A' }] },
+        { type: 'function_call', call_id: 'call_a', name: 'tool_a', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'call_a', output: 'a-result' },
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'final summary thought' }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Here is A' }] },
+      ],
+      stream: true,
+    });
+    const msgs = reasonAsstUpstream.calls[0].body.messages;
+    check('reasoning attached to assistant message (final response in tool-call turn)', () => {
+      const asstText = msgs.find(m => m.role === 'assistant' && m.content === 'Here is A');
+      assert.ok(asstText, 'expected final assistant text message');
+      assert.strictEqual(asstText.reasoning_content, 'final summary thought');
+    });
+    check('reasoning still attached to assistant tool_calls message', () => {
+      const asstTools = msgs.find(m => m.role === 'assistant' && m.tool_calls);
+      assert.ok(asstTools);
+      assert.strictEqual(asstTools.reasoning_content, 'analyze A');
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(resolve => reasonAsstUpstream.server.close(resolve));
   }
 
   // function_call_output 的 output 是对象时应该 JSON.stringify

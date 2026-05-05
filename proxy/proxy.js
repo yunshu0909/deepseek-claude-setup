@@ -143,8 +143,20 @@ function responsesInputToMessages(payload) {
     if (item.type === 'message') {
       const role = item.role === 'developer' ? 'system' : item.role;
       const text = contentToText(item.content);
-      if (text) messages.push({ role, content: text });
-      // 文档：无 tool_call 的 reasoning_content 在上下文中会被忽略
+      if (text) {
+        const msg = { role, content: text };
+        // assistant 消息也要附加 reasoning_content：DeepSeek 文档规定
+        // "在两个 user 之间如果有工具调用，所有 assistant 的 reasoning_content
+        // 必须回传"。无工具调用时传过去 DeepSeek 会忽略，所以无差别附加最安全
+        if (role === 'assistant' && pendingReasoning) {
+          msg.reasoning_content = pendingReasoning;
+        }
+        messages.push(msg);
+      } else if (role === 'assistant' && pendingReasoning) {
+        // text 为空但有 reasoning（极少见但可能）
+        messages.push({ role: 'assistant', content: null, reasoning_content: pendingReasoning });
+      }
+      // 用掉就清空（每条 reasoning 绑定到下一个 assistant 行为）
       pendingReasoning = '';
       continue;
     }
