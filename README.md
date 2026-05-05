@@ -18,6 +18,19 @@ npx -y github:yunshu0909/deepseek-claude-setup
 
 如果后续发布到 npm，也可以使用 `npx deepseek-claude-setup`。
 
+> **关于 npx 缓存**：`npx -y github:...` 会把代码 git clone 到 `~/.npm/_npx/<hash>/` 缓存。
+> 第二次跑同样命令默认走缓存，可能不是 GitHub 上最新版。本工具会在主面板启动时自动检测
+> `proxy.js` 是否升级并热加载，但 `cli.js` 自身（主面板交互逻辑）仍受 npx 缓存影响。
+> 想强制拉最新 cli.js：
+>
+> ```bash
+> # 方式 1：清缓存后跑
+> rm -rf ~/.npm/_npx && npx -y github:yunshu0909/deepseek-claude-setup
+>
+> # 方式 2：显式指定 tag
+> npx -y github:yunshu0909/deepseek-claude-setup#v1.3.5
+> ```
+
 ## 使用
 
 首次运行进入配置向导（输入 API Key、选模型、选思考模式、选思考深度），之后进入主面板：
