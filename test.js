@@ -201,7 +201,7 @@ async function run() {
   settingsPatcher.patch(cfg);
   const patched = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
   check('points Claude Code at the local proxy', () => {
-    assert.strictEqual(patched.env.ANTHROPIC_BASE_URL, `http://localhost:${proxyPort}`);
+    assert.strictEqual(patched.env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${proxyPort}`);
   });
   check('writes Claude Code model env and top-level model', () => {
     assert.strictEqual(patched.env.ANTHROPIC_MODEL, cfg.model);
@@ -227,14 +227,14 @@ async function run() {
   check('writes [profiles.default] pointing to deepseek_local', () => {
     assert.match(codexConfig, /\[profiles\.default\]/);
     assert.match(codexConfig, /model_provider = "deepseek_local"/);
-    assert.match(codexConfig, new RegExp(`base_url = "http://localhost:${proxyPort}/v1"`));
+    assert.match(codexConfig, new RegExp(`base_url = "http://127.0.0.1:${proxyPort}/v1"`));
     assert.match(codexConfig, /experimental_bearer_token = "sk-test-key"/);
   });
   check('preserves original top-level model', () => {
     assert.match(codexConfig, /model = "gpt-5.5"/);
   });
   check('writes (none) for original defaults when no [profiles.default] existed', () => {
-    assert.match(codexConfig, /\(none\)/);
+    assert.match(codexConfig, /# \(none\)/);
   });
   codexPatcher.restore();
   check('restores: removes managed block, no [profiles.default] left', () => {
@@ -411,8 +411,10 @@ async function run() {
     check('translates Codex Responses requests into DeepSeek chat completions', () => {
       assert.strictEqual(chatUpstream.calls[0].url, '/chat/completions');
       assert.strictEqual(chatUpstream.calls[0].body.model, cfg.model);
+      // Chat Completions 路径用 reasoning_effort 控制强度，thinking 控制开关，不发 output_config
+      assert.strictEqual(chatUpstream.calls[0].body.reasoning_effort, cfg.effort);
       assert.deepStrictEqual(chatUpstream.calls[0].body.thinking, { type: 'enabled' });
-      assert.deepStrictEqual(chatUpstream.calls[0].body.output_config, { effort: cfg.effort });
+      assert.strictEqual(chatUpstream.calls[0].body.output_config, undefined);
       assert.strictEqual(chatUpstream.calls[0].body.tools[0].function.name, 'exec_command');
     });
   } finally {
@@ -530,12 +532,231 @@ async function run() {
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
       stream: true,
     });
-    check('thinking disabled: no output_config sent to upstream', () => {
+    check('thinking disabled: thinking={type:disabled} sent to upstream', () => {
+      assert.deepStrictEqual(noThinkingUpstream.calls[0].body.thinking, { type: 'disabled' });
+    });
+    check('thinking disabled: no reasoning_effort and no output_config to upstream', () => {
+      // 关闭思考时不发 reasoning_effort（强度对关闭无意义）也不发 output_config（那是 Anthropic 路径专用）
+      assert.strictEqual(noThinkingUpstream.calls[0].body.reasoning_effort, undefined);
       assert.strictEqual(noThinkingUpstream.calls[0].body.output_config, undefined);
     });
   } finally {
     await proxyManager.stop();
     await new Promise(resolve => noThinkingUpstream.server.close(resolve));
+  }
+
+  // --- D1.A: function_call_output input → role=tool 翻译（多轮工具调用关键路径） ---
+  console.log('\n-- codex: function_call_output input translation --');
+  const fcOutUpstream = await makeChatUpstream({ mode: 'text_only' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(fcOutUpstream.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'list files' }] },
+        { type: 'function_call', call_id: 'call_abc123', name: 'exec_command', arguments: '{"cmd":"ls"}' },
+        { type: 'function_call_output', call_id: 'call_abc123', output: 'file1.txt\nfile2.txt' },
+      ],
+      stream: true,
+    });
+    const sentMessages = fcOutUpstream.calls[0].body.messages;
+    check('function_call_output translated to role=tool with tool_call_id', () => {
+      const toolMsg = sentMessages.find(m => m.role === 'tool');
+      assert.ok(toolMsg, 'expected at least one tool message');
+      assert.strictEqual(toolMsg.tool_call_id, 'call_abc123');
+      assert.strictEqual(toolMsg.content, 'file1.txt\nfile2.txt');
+    });
+    check('function_call input translated to assistant tool_calls', () => {
+      const asstMsg = sentMessages.find(m => m.role === 'assistant' && m.tool_calls);
+      assert.ok(asstMsg, 'expected assistant message with tool_calls');
+      assert.strictEqual(asstMsg.tool_calls[0].id, 'call_abc123');
+      assert.strictEqual(asstMsg.tool_calls[0].function.name, 'exec_command');
+      assert.strictEqual(asstMsg.tool_calls[0].function.arguments, '{"cmd":"ls"}');
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(resolve => fcOutUpstream.server.close(resolve));
+  }
+
+  // DeepSeek 文档要求：含工具调用的轮次必须回传 reasoning_content，否则 400
+  console.log('\n-- codex: reasoning_content carried into tool-call assistant messages --');
+  const reasonCarryUpstream = await makeChatUpstream({ mode: 'text_only' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(reasonCarryUpstream.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'list files' }] },
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'I should call ls' }] },
+        { type: 'function_call', call_id: 'call_z', name: 'exec', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'call_z', output: 'a.txt' },
+      ],
+      stream: true,
+    });
+    const msgs = reasonCarryUpstream.calls[0].body.messages;
+    check('reasoning before function_call is attached to assistant message', () => {
+      const asst = msgs.find(m => m.role === 'assistant' && m.tool_calls);
+      assert.ok(asst, 'expected assistant message with tool_calls');
+      assert.strictEqual(asst.reasoning_content, 'I should call ls');
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(r => reasonCarryUpstream.server.close(r));
+  }
+
+  // reasoning 在普通 message 之前应该被丢弃（文档：无 tool_call 的 reasoning 会被忽略）
+  const reasonDropUpstream = await makeChatUpstream({ mode: 'text_only' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(reasonDropUpstream.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'stale thought' }] },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+      ],
+      stream: true,
+    });
+    const msgs = reasonDropUpstream.calls[0].body.messages;
+    check('reasoning before plain message (no tool_call) is dropped', () => {
+      const anyWithReasoning = msgs.find(m => m.reasoning_content);
+      assert.strictEqual(anyWithReasoning, undefined, 'no message should carry reasoning_content');
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(resolve => reasonDropUpstream.server.close(resolve));
+  }
+
+  // function_call_output 的 output 是对象时应该 JSON.stringify
+  const fcOutObj = await makeChatUpstream({ mode: 'text_only' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(fcOutObj.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'q' }] },
+        { type: 'function_call_output', call_id: 'call_x', output: { result: 'ok', count: 3 } },
+      ],
+      stream: true,
+    });
+    check('function_call_output: object output gets JSON.stringify', () => {
+      const tm = fcOutObj.calls[0].body.messages.find(m => m.role === 'tool');
+      assert.ok(tm, 'expected a tool message');
+      assert.strictEqual(tm.content, '{"result":"ok","count":3}');
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(r => fcOutObj.server.close(r));
+  }
+
+  // --- D1.B: function_call output_item 必须含 id == call_id 且都是 call_ 前缀 ---
+  console.log('\n-- codex: function_call call_id contract --');
+  const callIdUpstream = await makeChatUpstream({ mode: 'tool_call' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(callIdUpstream.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    const response = await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'ls' }] }],
+      tools: [{ type: 'function', name: 'exec_command', description: 'Run', parameters: { type: 'object', properties: {} } }],
+      stream: true,
+    });
+    // 抓出 output_item.added 事件里的 function_call item
+    const fcAddedMatch = response.body.match(/data: ({"type":"response\.output_item\.added"[^\n]*"type":"function_call"[^\n]*})/);
+    check('function_call item has both id and call_id with call_ prefix', () => {
+      assert.ok(fcAddedMatch, 'expected output_item.added with function_call item');
+      const event = JSON.parse(fcAddedMatch[1]);
+      assert.ok(event.item.id.startsWith('call_'), `id should start with call_, got ${event.item.id}`);
+      assert.ok(event.item.call_id.startsWith('call_'), `call_id should start with call_, got ${event.item.call_id}`);
+      assert.strictEqual(event.item.id, event.item.call_id, 'id must equal call_id for Codex compat');
+    });
+    check('function_call_arguments.done does NOT include name', () => {
+      const doneMatch = response.body.match(/data: ({"type":"response\.function_call_arguments\.done"[^\n]*})/);
+      assert.ok(doneMatch);
+      const event = JSON.parse(doneMatch[1]);
+      assert.strictEqual(event.name, undefined, 'arguments.done must not contain name');
+      assert.ok(event.arguments, 'arguments.done must contain arguments string');
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(resolve => callIdUpstream.server.close(resolve));
+  }
+
+  // --- D1.C: reasoning 是独立 output_item，与 message item 分离 ---
+  console.log('\n-- codex: reasoning is independent output_item --');
+  const reasonUpstream = await makeChatUpstream({ mode: 'text_with_reasoning' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(reasonUpstream.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    const response = await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
+      stream: true,
+    });
+    const addedEvents = [...response.body.matchAll(/data: ({"type":"response\.output_item\.added"[^\n]*})/g)]
+      .map(m => JSON.parse(m[1]));
+    check('reasoning emits its own output_item.added with type=reasoning', () => {
+      const reasoningItem = addedEvents.find(e => e.item.type === 'reasoning');
+      assert.ok(reasoningItem, 'expected output_item.added with type=reasoning');
+    });
+    check('message emits a separate output_item.added with type=message', () => {
+      const messageItem = addedEvents.find(e => e.item.type === 'message');
+      assert.ok(messageItem, 'expected output_item.added with type=message');
+    });
+    check('reasoning and message have different item ids and output_index', () => {
+      const r = addedEvents.find(e => e.item.type === 'reasoning');
+      const m = addedEvents.find(e => e.item.type === 'message');
+      assert.notStrictEqual(r.item.id, m.item.id);
+      assert.notStrictEqual(r.output_index, m.output_index);
+    });
+    check('reasoning item emits full 6-step lifecycle', () => {
+      // added → content_part.added → reasoning_text.delta+ → reasoning_text.done → content_part.done → output_item.done
+      assert.match(response.body, /response\.output_item\.added[^\n]*"type":"reasoning"/);
+      assert.match(response.body, /response\.content_part\.added[^\n]*"type":"reasoning_text"/);
+      assert.match(response.body, /response\.reasoning_text\.delta/);
+      assert.match(response.body, /response\.reasoning_text\.done/);
+      assert.match(response.body, /response\.content_part\.done[^\n]*"type":"reasoning_text"/);
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(resolve => reasonUpstream.server.close(resolve));
+  }
+
+  // --- D1.D: tool args 是真流式（每个上游 chunk 触发一个 delta 事件） ---
+  console.log('\n-- codex: tool args true streaming --');
+  const streamArgsUpstream = await makeChatUpstream({ mode: 'tool_call' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(streamArgsUpstream.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    const response = await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'ls' }] }],
+      tools: [{ type: 'function', name: 'exec_command', description: 'Run', parameters: { type: 'object', properties: {} } }],
+      stream: true,
+    });
+    // tool_call mode 上游发了 3 个 args 增量 chunk: '{"cmd"' / ':"ls"' / '}'
+    const argDeltas = [...response.body.matchAll(/data: ({"type":"response\.function_call_arguments\.delta"[^\n]*})/g)]
+      .map(m => JSON.parse(m[1]));
+    check('tool args emit one delta per upstream chunk (not coalesced)', () => {
+      assert.ok(argDeltas.length >= 3, `expected >=3 incremental deltas, got ${argDeltas.length}`);
+    });
+    check('tool args delta events carry incremental delta text', () => {
+      const concatenated = argDeltas.map(e => e.delta).join('');
+      assert.strictEqual(concatenated, '{"cmd":"ls"}');
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(resolve => streamArgsUpstream.server.close(resolve));
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

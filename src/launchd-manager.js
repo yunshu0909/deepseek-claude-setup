@@ -7,6 +7,8 @@ const CONFIG_DIR = process.env.DEEPSEEK_CLAUDE_CONFIG_DIR || path.join(os.homedi
 const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.deepseek.claude-proxy.plist');
 const PROXY_SCRIPT = path.join(CONFIG_DIR, 'proxy.js');
 
+const SERVICE_TARGET = `gui/${process.getuid?.() ?? 501}/com.deepseek.claude-proxy`;
+
 function install() {
   fs.mkdirSync(path.dirname(PLIST_PATH), { recursive: true });
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -31,11 +33,19 @@ function install() {
 </dict>
 </plist>`;
   fs.writeFileSync(PLIST_PATH, plist);
-  execSync(`launchctl load "${PLIST_PATH}"`, { stdio: 'ignore' });
+  // 优先使用 bootstrap（macOS 10.10+ 推荐），失败时降级到 load 兼容旧系统
+  try {
+    execSync(`launchctl bootstrap gui/$(id -u) "${PLIST_PATH}"`, { stdio: 'ignore', shell: '/bin/bash' });
+  } catch {
+    try { execSync(`launchctl load "${PLIST_PATH}"`, { stdio: 'ignore' }); } catch {}
+  }
 }
 
 function uninstall() {
-  try { execSync(`launchctl unload "${PLIST_PATH}"`, { stdio: 'ignore' }); } catch {}
+  // 先 bootout，失败再 unload
+  try { execSync(`launchctl bootout ${SERVICE_TARGET}`, { stdio: 'ignore' }); } catch {
+    try { execSync(`launchctl unload "${PLIST_PATH}"`, { stdio: 'ignore' }); } catch {}
+  }
   try { fs.unlinkSync(PLIST_PATH); } catch {}
 }
 

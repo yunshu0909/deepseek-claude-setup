@@ -3,8 +3,9 @@ const path = require('path');
 const os = require('os');
 
 const SETTINGS_PATH = process.env.CLAUDE_SETTINGS_PATH || path.join(os.homedir(), '.claude', 'settings.json');
+// 用 127.0.0.1 而不是 localhost：proxy 只 bind v4，部分系统 localhost 解析为 ::1 会连不上
 const PROXY_URL = process.env.DEEPSEEK_CLAUDE_PROXY_URL
-  || (process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? `http://localhost:${process.env.DEEPSEEK_CLAUDE_PROXY_PORT}` : 'http://localhost:17861');
+  || (process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? `http://127.0.0.1:${process.env.DEEPSEEK_CLAUDE_PROXY_PORT}` : 'http://127.0.0.1:17861');
 const DIRECT_URL = 'https://api.deepseek.com/anthropic';
 const FLASH_MODEL = 'deepseek-v4-flash';
 const SAVED_CONFIG_PATH = path.join(process.env.DEEPSEEK_CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.deepseek-claude'), 'config.json');
@@ -78,8 +79,9 @@ function patch(config = {}) {
   s.env.ANTHROPIC_MODEL = model;
   s.env.ANTHROPIC_DEFAULT_OPUS_MODEL = model;
   s.env.ANTHROPIC_DEFAULT_SONNET_MODEL = model;
-  s.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = model === FLASH_MODEL ? FLASH_MODEL : FLASH_MODEL;
-  s.env.CLAUDE_CODE_SUBAGENT_MODEL = model === FLASH_MODEL ? FLASH_MODEL : FLASH_MODEL;
+  // Haiku 与 subagent 始终使用 flash（成本/速度优先），不随主模型切换
+  s.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = FLASH_MODEL;
+  s.env.CLAUDE_CODE_SUBAGENT_MODEL = FLASH_MODEL;
   if (thinking === 'enabled') {
     s.env.CLAUDE_CODE_EFFORT_LEVEL = effort;
     s.effortLevel = effort;

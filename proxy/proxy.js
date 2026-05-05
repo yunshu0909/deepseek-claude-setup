@@ -1,8 +1,19 @@
+/**
+ * DeepSeek 代理服务
+ *
+ * 负责：
+ * - Anthropic Messages 路径透传到 DeepSeek，并覆盖 model/thinking/output_config.effort
+ * - Codex Responses API 翻译到 DeepSeek Chat Completions（含真流式状态机）
+ * - 维持 LaunchAgent 拉起的常驻进程，提供 /__health 健康检查
+ *
+ * @module proxy/proxy
+ */
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 
 const CONFIG_DIR = process.env.DEEPSEEK_CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.deepseek-claude');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
@@ -28,6 +39,10 @@ function normalizeThinking(thinking) {
   return thinking === 'disabled' ? 'disabled' : 'enabled';
 }
 
+function generateCallId() {
+  return `call_${crypto.randomBytes(12).toString('hex')}`;
+}
+
 function healthBody() {
   const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
   return JSON.stringify({
@@ -50,18 +65,94 @@ function contentToText(content) {
   return content.map(part => part.text || part.content || '').filter(Boolean).join('\n');
 }
 
+/**
+ * 把 Codex Responses API 的 input 数组翻译成 OpenAI Chat Completions 的 messages
+ *
+ * 处理四类 input item：
+ * - message：常规对话（user/assistant/developer）
+ * - reasoning：Codex 在前轮响应里产生的思考记录，需要在工具调用轮次回传给 DeepSeek
+ * - function_call：assistant 调用工具的历史记录
+ * - function_call_output：工具结果回填
+ *
+ * DeepSeek 文档要求：
+ * - 进行了工具调用的轮次，必须完整回传 reasoning_content，否则 400 报错
+ * - 未进行工具调用的 assistant 轮次的 reasoning_content 会被忽略
+ *
+ * 翻译策略：累积 pendingReasoning，遇到 function_call 时附加到 assistant 消息；
+ * 遇到普通 message 时清空（不带去下一轮）
+ *
+ * @param {object} payload - Responses API 请求体
+ * @returns {Array<object>} Chat Completions messages
+ */
 function responsesInputToMessages(payload) {
   const messages = [];
   if (payload.instructions) {
     messages.push({ role: 'system', content: payload.instructions });
   }
+
+  let pendingReasoning = '';
+
   for (const item of payload.input || []) {
-    if (item.type !== 'message') continue;
-    const role = item.role === 'developer' ? 'system' : item.role;
-    const text = contentToText(item.content);
-    if (text) messages.push({ role, content: text });
+    if (item.type === 'reasoning') {
+      // Codex 的 reasoning item 可能用 content[{type:'reasoning_text'}] 或 summary[{type:'summary_text'}]
+      const fromContent = (item.content || [])
+        .filter(c => c.type === 'reasoning_text' || c.type === 'reasoning')
+        .map(c => c.text || '')
+        .join('');
+      const fromSummary = (item.summary || [])
+        .filter(c => c.type === 'summary_text')
+        .map(c => c.text || '')
+        .join('');
+      pendingReasoning += fromContent || fromSummary;
+      continue;
+    }
+
+    if (item.type === 'message') {
+      const role = item.role === 'developer' ? 'system' : item.role;
+      const text = contentToText(item.content);
+      if (text) messages.push({ role, content: text });
+      // 文档：无 tool_call 的 reasoning_content 在上下文中会被忽略
+      pendingReasoning = '';
+      continue;
+    }
+
+    if (item.type === 'function_call') {
+      const callId = item.call_id || item.id;
+      const msg = {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: callId,
+          type: 'function',
+          function: {
+            name: item.name || '',
+            arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {}),
+          },
+        }],
+      };
+      // 工具调用轮次必须带 reasoning_content（否则 DeepSeek 400）
+      if (pendingReasoning) {
+        msg.reasoning_content = pendingReasoning;
+        pendingReasoning = '';
+      }
+      messages.push(msg);
+      continue;
+    }
+
+    if (item.type === 'function_call_output') {
+      const tcId = item.call_id || item.tool_call_id || '';
+      let content = '';
+      if (item.output !== undefined) {
+        content = typeof item.output === 'string' ? item.output : JSON.stringify(item.output);
+      } else if (item.content !== undefined) {
+        content = typeof item.content === 'string' ? item.content : JSON.stringify(item.content);
+      }
+      messages.push({ role: 'tool', tool_call_id: tcId, content });
+      continue;
+    }
   }
-  if (!messages.some(message => message.role === 'user')) {
+
+  if (!messages.some(m => m.role === 'user' || m.role === 'tool')) {
     messages.push({ role: 'user', content: 'Continue.' });
   }
   return messages;
@@ -89,102 +180,200 @@ function responsesToolsToChatTools(tools) {
   return functions.length ? functions : undefined;
 }
 
-function streamChatToResponses(res, chatPayload, originalPayload, streamMode) {
+/**
+ * Codex Responses API 流式状态机 — 把 DeepSeek Chat Completions SSE 翻译成 Responses API SSE
+ *
+ * 关键设计：
+ * - reasoning / message / function_call 各自是独立的 output_item（不共用一个 message item）
+ * - 每个 item 严格走完整 6 步：
+ *     output_item.added → content_part.added → *.delta+ → *.done → content_part.done → output_item.done
+ *   （function_call item 不用 content_part，直接 added → arguments.delta+ → arguments.done → output_item.done）
+ * - function_call item 的 id 与 call_id 同值，前缀 "call_"，避免 Codex 用前缀错配
+ * - tool_calls 按 index 累积（理论上 DeepSeek 不并行，但保留扩展空间）
+ *
+ * @param {object} res - Codex 侧的 HTTP response
+ * @param {object} chatPayload - 已注入 reasoning_effort 等的 Chat Completions 请求体
+ * @param {string} streamMode - 'stream' | 'json'
+ */
+function streamChatToResponses(res, chatPayload, streamMode) {
   const responseId = `resp_${Date.now()}`;
-  const now = Math.floor(Date.now() / 1000);
+  const createdAt = Math.floor(Date.now() / 1000);
   let outputIndex = 0;
+  let seq = 0;
   let streamTerminated = false;
-  let phase = 'start'; // start | reasoning | text | tool_call | completed
-  let currentItem = null; // { id, type, output_index, content_index, text }
+  // phase: idle | reasoning | message | tool_call
+  let phase = 'idle';
+  let currentItem = null;
+  // 多 tool_call 累积：Map<index, {callId, name, args, output_index}>
+  const toolCallsByIndex = new Map();
   const outputItems = [];
   let responseUsage = null;
+  let sawAnyDelta = false;
+  // 思考验证统计：reasoningChars=0 说明 DeepSeek 实际没启用思考（不论请求里发了什么 effort）
+  let reasoningChars = 0;
+  let textChars = 0;
+  const reqStartTs = Date.now();
 
   function emit(event) {
+    event.sequence_number = seq++;
     if (streamMode === 'stream') sendSse(res, event);
-    return event;
   }
 
   function emitCreated() {
-    phase = 'in_progress';
     const response = {
-      id: responseId, object: 'response', created_at: now, status: 'in_progress',
+      id: responseId, object: 'response', created_at: createdAt, status: 'in_progress',
       model: chatPayload.model, output: [],
     };
     emit({ type: 'response.created', response });
     emit({ type: 'response.in_progress', response: { ...response } });
-    return response;
   }
 
-  function startItem(itemType, extra = {}) {
-    // 关闭当前 item（如有）
-    if (currentItem && !currentItem.closed) closeItem();
+  // -------- reasoning item --------
 
-    const itemId = `msg_${Date.now()}_${outputIndex}`;
-    currentItem = { id: itemId, type: itemType, output_index: outputIndex, content_index: 0, text: '', closed: false };
-    const item = { id: itemId, type: itemType, status: 'in_progress', role: 'assistant', content: [], ...extra };
+  function startReasoningItem() {
+    const itemId = `rs_${Date.now()}_${outputIndex}`;
+    currentItem = { id: itemId, type: 'reasoning', output_index: outputIndex, text: '' };
+    const item = { id: itemId, type: 'reasoning', status: 'in_progress', summary: [], content: [] };
     emit({ type: 'response.output_item.added', output_index: outputIndex, item });
-    if (itemType === 'message') {
-      const part = { type: 'output_text', text: '', annotations: [] };
-      emit({ type: 'response.content_part.added', output_index: outputIndex, item_id: itemId, content_index: 0, part });
-    } else if (itemType === 'reasoning') {
-      const part = { type: 'reasoning_text', text: '', annotations: [] };
-      emit({ type: 'response.content_part.added', output_index: outputIndex, item_id: itemId, content_index: 0, part });
-    }
-    return currentItem;
+    const part = { type: 'reasoning_text', text: '' };
+    emit({ type: 'response.content_part.added', output_index: outputIndex, item_id: itemId, content_index: 0, part });
   }
 
-  function emitDelta(deltaText) {
-    if (!currentItem) startItem('message');
+  function appendReasoning(deltaText) {
     currentItem.text += deltaText;
-    const eventType = currentItem.type === 'reasoning' ? 'response.reasoning_text.delta' : 'response.output_text.delta';
-    emit({ type: eventType, output_index: currentItem.output_index, item_id: currentItem.id, content_index: 0, delta: deltaText });
+    reasoningChars += deltaText.length;
+    emit({
+      type: 'response.reasoning_text.delta',
+      output_index: currentItem.output_index, item_id: currentItem.id, content_index: 0,
+      delta: deltaText,
+    });
   }
 
-  function closeItem() {
-    if (!currentItem || currentItem.closed) return;
-    currentItem.closed = true;
-    const { id, type, output_index, text } = currentItem;
-
-    if (type === 'message') {
-      emit({ type: 'response.output_text.done', output_index, item_id: id, content_index: 0, text });
-      const part = { type: 'output_text', text, annotations: [] };
-      emit({ type: 'response.content_part.done', output_index, item_id: id, content_index: 0, part });
-    } else if (type === 'reasoning') {
-      emit({ type: 'response.reasoning_text.done', output_index, item_id: id, content_index: 0, text });
-      const part = { type: 'reasoning_text', text, annotations: [] };
-      emit({ type: 'response.content_part.done', output_index, item_id: id, content_index: 0, part });
-    }
-
-    const item = { id, type, status: 'completed', role: 'assistant', content: [{ type: type === 'reasoning' ? 'reasoning_text' : 'output_text', text, annotations: [] }] };
+  function closeReasoningItem() {
+    const { id, output_index, text } = currentItem;
+    emit({ type: 'response.reasoning_text.done', output_index, item_id: id, content_index: 0, text });
+    const part = { type: 'reasoning_text', text };
+    emit({ type: 'response.content_part.done', output_index, item_id: id, content_index: 0, part });
+    const item = { id, type: 'reasoning', status: 'completed', summary: [], content: [{ type: 'reasoning_text', text }] };
     emit({ type: 'response.output_item.done', output_index, item });
     outputItems.push(item);
     outputIndex++;
     currentItem = null;
   }
 
-  function emitToolCall(name, args) {
-    if (currentItem && !currentItem.closed) closeItem();
-    const itemId = `fc_${Date.now()}_${outputIndex}`;
-    const item = { id: itemId, type: 'function_call', name, status: 'in_progress', arguments: '' };
+  // -------- message item --------
+
+  function startMessageItem() {
+    const itemId = `msg_${Date.now()}_${outputIndex}`;
+    currentItem = { id: itemId, type: 'message', output_index: outputIndex, text: '' };
+    const item = { id: itemId, type: 'message', status: 'in_progress', role: 'assistant', content: [] };
     emit({ type: 'response.output_item.added', output_index: outputIndex, item });
-    // 逐字符发 arguments delta（模拟流式）
-    emit({ type: 'response.function_call_arguments.delta', output_index: outputIndex, item_id: itemId, delta: args });
-    const doneItem = { id: itemId, type: 'function_call', name, status: 'completed', arguments: args };
-    emit({ type: 'response.function_call_arguments.done', output_index: outputIndex, item_id: itemId, name, arguments: args });
-    emit({ type: 'response.output_item.done', output_index: outputIndex, item: doneItem });
-    outputItems.push(doneItem);
-    outputIndex++;
+    const part = { type: 'output_text', text: '', annotations: [] };
+    emit({ type: 'response.content_part.added', output_index: outputIndex, item_id: itemId, content_index: 0, part });
   }
+
+  function appendMessage(deltaText) {
+    currentItem.text += deltaText;
+    textChars += deltaText.length;
+    emit({
+      type: 'response.output_text.delta',
+      output_index: currentItem.output_index, item_id: currentItem.id, content_index: 0,
+      delta: deltaText,
+    });
+  }
+
+  function closeMessageItem() {
+    const { id, output_index, text } = currentItem;
+    emit({ type: 'response.output_text.done', output_index, item_id: id, content_index: 0, text });
+    const part = { type: 'output_text', text, annotations: [] };
+    emit({ type: 'response.content_part.done', output_index, item_id: id, content_index: 0, part });
+    const item = { id, type: 'message', status: 'completed', role: 'assistant', content: [part] };
+    emit({ type: 'response.output_item.done', output_index, item });
+    outputItems.push(item);
+    outputIndex++;
+    currentItem = null;
+  }
+
+  // -------- function_call item --------
+
+  function ensureToolCall(index, upstreamId, name) {
+    let tc = toolCallsByIndex.get(index);
+    if (!tc) {
+      const callId = upstreamId && /^call_/.test(upstreamId) ? upstreamId : generateCallId();
+      tc = { callId, name: name || '', args: '', output_index: outputIndex, opened: false };
+      toolCallsByIndex.set(index, tc);
+      outputIndex++; // 提前占位，避免后续 reasoning/message 抢同一个 output_index
+    }
+    if (name && !tc.name) tc.name = name;
+    return tc;
+  }
+
+  function openToolCallItem(tc) {
+    if (tc.opened) return;
+    tc.opened = true;
+    const item = { id: tc.callId, type: 'function_call', call_id: tc.callId, name: tc.name, arguments: '', status: 'in_progress' };
+    emit({ type: 'response.output_item.added', output_index: tc.output_index, item });
+  }
+
+  function appendToolCallArgs(tc, deltaText) {
+    if (!tc.opened) openToolCallItem(tc);
+    tc.args += deltaText;
+    emit({
+      type: 'response.function_call_arguments.delta',
+      output_index: tc.output_index, item_id: tc.callId,
+      delta: deltaText,
+    });
+  }
+
+  function closeToolCallItem(tc) {
+    if (!tc.opened) openToolCallItem(tc);
+    emit({
+      type: 'response.function_call_arguments.done',
+      output_index: tc.output_index, item_id: tc.callId,
+      arguments: tc.args,
+    });
+    const item = { id: tc.callId, type: 'function_call', call_id: tc.callId, name: tc.name, arguments: tc.args, status: 'completed' };
+    emit({ type: 'response.output_item.done', output_index: tc.output_index, item });
+    outputItems.push(item);
+  }
+
+  // -------- phase 切换 --------
+
+  function closeCurrent() {
+    if (!currentItem) return;
+    if (currentItem.type === 'reasoning') closeReasoningItem();
+    else if (currentItem.type === 'message') closeMessageItem();
+  }
+
+  function transitionTo(nextPhase) {
+    if (phase === nextPhase) return;
+    closeCurrent();
+    if (nextPhase === 'reasoning') startReasoningItem();
+    else if (nextPhase === 'message') startMessageItem();
+    phase = nextPhase;
+  }
+
+  // -------- 终止 --------
 
   function emitCompleted() {
     if (streamTerminated) return;
     streamTerminated = true;
-    if (currentItem && !currentItem.closed) closeItem();
+    closeCurrent();
+    // 关闭所有未关闭的 tool_calls（按 index 升序）
+    const sortedTcs = [...toolCallsByIndex.entries()].sort(([a], [b]) => a - b);
+    for (const [, tc] of sortedTcs) closeToolCallItem(tc);
+
+    const usage = responseUsage ? {
+      input_tokens: responseUsage.prompt_tokens || 0,
+      output_tokens: responseUsage.completion_tokens || 0,
+      total_tokens: responseUsage.total_tokens || 0,
+    } : null;
+    const messageOutputs = outputItems.filter(it => it.type === 'message');
     const response = {
-      id: responseId, object: 'response', created_at: now, status: 'completed',
+      id: responseId, object: 'response', created_at: createdAt, status: 'completed',
       model: chatPayload.model, output: outputItems,
-      output_text: outputItems.filter(it => it.type === 'message').map(it => it.content[0]?.text || '').join(''),
-      usage: responseUsage,
+      output_text: messageOutputs.flatMap(it => it.content.filter(c => c.type === 'output_text').map(c => c.text)).join(''),
+      usage,
     };
     if (streamMode === 'json') {
       const body = JSON.stringify(response);
@@ -194,25 +383,36 @@ function streamChatToResponses(res, chatPayload, originalPayload, streamMode) {
       emit({ type: 'response.completed', response });
       res.end();
     }
+
+    // 关键诊断日志：thinking=Y/N 直接看 DeepSeek 实际有没有返回 reasoning
+    const tcCount = outputItems.filter(it => it.type === 'function_call').length;
+    const elapsed = Date.now() - reqStartTs;
+    log(
+      `RESPONSES_DONE id=${responseId} effort=${chatPayload.reasoning_effort} `
+      + `thinking=${reasoningChars > 0 ? `Y(${reasoningChars}chars)` : 'N'} `
+      + `text=${textChars}chars tools=${tcCount} `
+      + `usage=${usage ? `${usage.input_tokens}/${usage.output_tokens}` : 'none'} `
+      + `${elapsed}ms`
+    );
   }
 
   function emitFailed(error) {
     if (streamTerminated) return;
     streamTerminated = true;
-    if (streamMode === 'stream' && !res.headersSent) {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-    }
+    log(`RESPONSES_FAILED ${error.code || 'unknown'}: ${(error.message || '').slice(0, 200)}`);
     if (streamMode === 'json') {
       const body = JSON.stringify({ id: responseId, object: 'response', status: 'failed', error });
       if (!res.headersSent) res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
       res.end(body);
     } else {
+      if (!res.headersSent) res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
       emit({ type: 'response.failed', response: { id: responseId, object: 'response', status: 'failed', error } });
       res.end();
     }
   }
 
-  // --- main ---
+  // -------- 上游请求 --------
+
   const bodyOut = JSON.stringify(chatPayload);
   const reqHeaders = {
     'Content-Type': 'application/json',
@@ -232,23 +432,21 @@ function streamChatToResponses(res, chatPayload, originalPayload, streamMode) {
     if (streamMode === 'stream') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     }
-
     emitCreated();
 
     if (upstreamRes.statusCode && upstreamRes.statusCode >= 400) {
       let errBody = '';
       upstreamRes.setEncoding('utf8');
       upstreamRes.on('data', c => { errBody += c; });
-      upstreamRes.on('end', () => emitFailed({ code: 'upstream_error', message: errBody || `Upstream HTTP ${upstreamRes.statusCode}` }));
+      upstreamRes.on('end', () => emitFailed({ code: 'upstream_error', message: errBody.slice(0, 500) || `Upstream HTTP ${upstreamRes.statusCode}` }));
       return;
     }
 
     let lineBuf = '';
-    let tcName = null;
-    let tcArgs = '';
     upstreamRes.setEncoding('utf8');
     upstreamRes.on('data', chunk => {
       if (streamTerminated) return;
+      // 行缓冲：HTTP chunk 可能在 JSON 中间断开，不合并就会丢 delta
       lineBuf += chunk;
       const lines = lineBuf.split(/\r?\n/);
       lineBuf = lines.pop();
@@ -257,52 +455,63 @@ function streamChatToResponses(res, chatPayload, originalPayload, streamMode) {
         if (!line.startsWith('data:')) continue;
         const data = line.slice(5).trim();
         if (!data || data === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(data);
-          const choice = parsed.choices?.[0];
-          const delta = choice?.delta;
-          if (!delta) continue;
+        let parsed;
+        try { parsed = JSON.parse(data); } catch { continue; }
 
-          // reasoning
-          if (delta.reasoning_content) {
-            if (phase !== 'reasoning') { startItem('reasoning'); phase = 'reasoning'; }
-            emitDelta(delta.reasoning_content);
+        // include_usage 的最后一个 chunk 是 {choices:[], usage:{...}}
+        if (parsed.usage) responseUsage = parsed.usage;
+
+        const choice = parsed.choices?.[0];
+        if (!choice) continue;
+        const delta = choice.delta || {};
+        sawAnyDelta = true;
+
+        // reasoning（独立 item，与 message 分离）
+        if (delta.reasoning_content) {
+          transitionTo('reasoning');
+          appendReasoning(delta.reasoning_content);
+        }
+
+        // tool_calls（按 index 累积；首 chunk 带 name+id，后续 chunk 带 args 增量）
+        if (Array.isArray(delta.tool_calls)) {
+          // 切换 phase 前关掉 reasoning/message item（tool_call 不通过 currentItem 管理）
+          if (phase !== 'tool_call') { closeCurrent(); phase = 'tool_call'; }
+          for (const tc of delta.tool_calls) {
+            const idx = typeof tc.index === 'number' ? tc.index : 0;
+            const fnName = tc.function?.name;
+            const tcRecord = ensureToolCall(idx, tc.id, fnName);
+            if (fnName && !tcRecord.opened) openToolCallItem(tcRecord);
+            const argsDelta = tc.function?.arguments;
+            if (argsDelta) appendToolCallArgs(tcRecord, argsDelta);
           }
+        }
 
-          // tool calls
-          if (delta.tool_calls) {
-            const tc = delta.tool_calls[0];
-            if (tc) {
-              if (phase !== 'tool_call') { if (currentItem && !currentItem.closed) closeItem(); phase = 'tool_call'; }
-              if (tc.function?.name) { tcName = tc.function.name; tcArgs = ''; }
-              if (tc.function?.arguments) tcArgs += tc.function.arguments;
-            }
+        // 文本内容（注意：与 reasoning/tool_call 互斥切换）
+        if (delta.content && phase !== 'tool_call') {
+          transitionTo('message');
+          appendMessage(delta.content);
+        }
+
+        // 完成
+        if (choice.finish_reason) {
+          if (choice.finish_reason === 'tool_calls' && toolCallsByIndex.size === 0) {
+            // PRD §3.2.6.c flagged 风险：DeepSeek 偶发 fall-through，
+            // finish_reason=tool_calls 但流式没发 delta.tool_calls。
+            // 当前实现仅记录日志；后续若用户实测命中再补 fallback retry。
+            log(`WARN: finish_reason=tool_calls but no tool_calls accumulated`);
           }
-
-          // text content (not tool call related)
-          if (delta.content && phase !== 'tool_call') {
-            if (phase === 'reasoning') { closeItem(); }
-            if (phase !== 'text') { startItem('message'); phase = 'text'; }
-            emitDelta(delta.content);
-          }
-
-          // finish
-          if (choice.finish_reason) {
-            if (choice.finish_reason === 'tool_calls' && tcName) {
-              emitToolCall(tcName, tcArgs);
-              tcName = null; tcArgs = '';
-            }
-            if (currentItem && !currentItem.closed) closeItem();
-          }
-
-          // usage
-          if (parsed.usage) responseUsage = parsed.usage;
-        } catch {}
+        }
       }
     });
 
     upstreamRes.on('end', () => {
-      if (!streamTerminated) emitCompleted();
+      if (!streamTerminated) {
+        if (!sawAnyDelta) {
+          emitFailed({ code: 'empty_stream', message: 'upstream closed without any delta' });
+        } else {
+          emitCompleted();
+        }
+      }
     });
 
     upstreamRes.on('error', err => {
@@ -324,6 +533,15 @@ function streamChatToResponses(res, chatPayload, originalPayload, streamMode) {
   upstream.end();
 }
 
+/**
+ * 处理 Codex Responses API 请求
+ *
+ * 按 DeepSeek 官方文档：
+ * - 思考模式开关：`thinking: {type: enabled/disabled}`，OpenAI 和 Anthropic 路径都支持
+ * - 思考强度（仅 enabled 时有效）：Chat Completions 路径用 `reasoning_effort`（high/max）；
+ *   Anthropic 路径用 `output_config.effort`
+ * - thinking=disabled 时 DeepSeek 真的不会输出 reasoning_content，代理无需在客户端侧拦截
+ */
 function handleResponses(req, res, payload) {
   const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
   const body = {
@@ -333,14 +551,21 @@ function handleResponses(req, res, payload) {
     stream_options: { include_usage: true },
     thinking: { type: thinking },
   };
-  const tools = responsesToolsToChatTools(payload.tools);
-  if (tools) body.tools = tools;
   if (thinking === 'enabled') {
-    body.output_config = { effort: normalizeEffort(CONFIG.effort || 'max') };
+    body.reasoning_effort = normalizeEffort(CONFIG.effort || 'max');
+  }
+
+  const tools = responsesToolsToChatTools(payload.tools);
+  if (tools) {
+    body.tools = tools;
+    body.tool_choice = 'auto';
+    log(`RESPONSES_TOOLS count=${tools.length} names=[${tools.map(t => t.function.name).join(',')}]`);
   }
 
   const streamMode = payload.stream !== false ? 'stream' : 'json';
-  streamChatToResponses(res, body, payload, streamMode);
+  const inputTypes = (payload.input || []).map(it => it.type + (it.role ? ':' + it.role : '')).join(',');
+  log(`RESPONSES stream=${streamMode} msgs=${body.messages.length} tools=${!!tools} thinking=${thinking} effort=${body.reasoning_effort || '-'} input=[${inputTypes}]`);
+  streamChatToResponses(res, body, streamMode);
 }
 
 let CONFIG;
@@ -376,6 +601,23 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Codex 启动时拉取模型列表
+  if (req.method === 'GET' && req.url.startsWith('/v1/models')) {
+    const modelId = CONFIG.model || 'deepseek-v4-pro';
+    const modelEntry = {
+      id: modelId, object: 'model', created: 1700000000, owned_by: 'deepseek',
+      slug: modelId, display_name: modelId,
+      supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    };
+    const body = JSON.stringify({
+      object: 'list',
+      data: [modelEntry],
+      models: [modelEntry],
+    });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+    return res.end(body);
+  }
+
   if (req.method !== 'POST') {
     res.writeHead(501);
     return res.end('POST only');
@@ -396,6 +638,7 @@ const server = http.createServer((req, res) => {
       return handleResponses(req, res, payload);
     }
 
+    // Anthropic Messages 路径透传（Claude Code 走这里）
     const incomingModel = payload.model || '?';
     const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
     payload.model = CONFIG.model || payload.model || 'deepseek-v4-pro';
@@ -422,6 +665,7 @@ const server = http.createServer((req, res) => {
     headers['anthropic-version'] = headers['anthropic-version'] || '2023-06-01';
 
     const client = TARGET_PROTOCOL === 'http:' ? http : https;
+    const reqStartTs = Date.now();
     const upstream = client.request({
       hostname: TARGET_HOST,
       port: TARGET_PORT,
@@ -432,6 +676,68 @@ const server = http.createServer((req, res) => {
     }, upstreamRes => {
       if (res.headersSent) return;
       res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+
+      // 嗅探 SSE 流统计 thinking/text 字符数（仅诊断，不影响透传）
+      const isStream = (upstreamRes.headers['content-type'] || '').includes('event-stream');
+      let thinkingChars = 0;
+      let textChars = 0;
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let lineBuf = '';
+      let jsonBuf = '';
+
+      upstreamRes.on('data', chunk => {
+        const text = chunk.toString('utf8');
+        if (isStream) {
+          lineBuf += text;
+          const lines = lineBuf.split(/\r?\n/);
+          lineBuf = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trim();
+            if (!data || data === '[DONE]') continue;
+            try {
+              const evt = JSON.parse(data);
+              // Anthropic SSE: content_block_delta with thinking_delta or text_delta
+              if (evt.type === 'content_block_delta') {
+                if (evt.delta?.type === 'thinking_delta') thinkingChars += (evt.delta.thinking || '').length;
+                if (evt.delta?.type === 'text_delta') textChars += (evt.delta.text || '').length;
+              }
+              if (evt.type === 'message_delta' && evt.usage) {
+                outputTokens = evt.usage.output_tokens || outputTokens;
+              }
+              if (evt.type === 'message_start' && evt.message?.usage) {
+                inputTokens = evt.message.usage.input_tokens || 0;
+                outputTokens = evt.message.usage.output_tokens || 0;
+              }
+            } catch {}
+          }
+        } else {
+          jsonBuf += text;
+        }
+      });
+
+      upstreamRes.on('end', () => {
+        if (!isStream && jsonBuf) {
+          try {
+            const j = JSON.parse(jsonBuf);
+            for (const block of j.content || []) {
+              if (block.type === 'thinking') thinkingChars += (block.thinking || '').length;
+              if (block.type === 'text') textChars += (block.text || '').length;
+            }
+            inputTokens = j.usage?.input_tokens || 0;
+            outputTokens = j.usage?.output_tokens || 0;
+          } catch {}
+        }
+        const elapsed = Date.now() - reqStartTs;
+        log(
+          `MSG_DONE model=${payload.model} `
+          + `thinking=${thinkingChars > 0 ? `Y(${thinkingChars}chars)` : 'N'} `
+          + `text=${textChars}chars stream=${isStream} `
+          + `usage=${inputTokens}/${outputTokens} ${elapsed}ms`
+        );
+      });
+
       upstreamRes.pipe(res);
     });
 

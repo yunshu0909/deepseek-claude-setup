@@ -3,12 +3,14 @@ const path = require('path');
 const os = require('os');
 
 const CODEX_CONFIG_PATH = process.env.CODEX_CONFIG_PATH || path.join(os.homedir(), '.codex', 'config.toml');
+// 用 127.0.0.1 而不是 localhost：proxy 只 bind v4，部分系统 localhost 解析为 ::1 会连不上
 const PROXY_URL = process.env.DEEPSEEK_CLAUDE_PROXY_URL
-  || (process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? `http://localhost:${process.env.DEEPSEEK_CLAUDE_PROXY_PORT}` : 'http://localhost:17861');
+  || (process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? `http://127.0.0.1:${process.env.DEEPSEEK_CLAUDE_PROXY_PORT}` : 'http://127.0.0.1:17861');
 const START = '# >>> deepseek-claude-setup codex';
 const END = '# <<< deepseek-claude-setup codex';
 const ORIG_START = '# --- original default profile ---';
 const ORIG_END = '# --- end original ---';
+const TOP_LEVEL_KEYS = ['model', 'model_reasoning_effort', 'model_provider'];
 
 function ensureDir() {
   fs.mkdirSync(path.dirname(CODEX_CONFIG_PATH), { recursive: true });
@@ -59,19 +61,40 @@ function parseOriginalFromComments(content) {
   const m = block.match(new RegExp(`${ORIG_START.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\n([\\s\\S]*?)${ORIG_END.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}`));
   if (!m) return null;
   const lines = m[1].trim();
-  if (lines === '(none)') return { none: true };
-  const kv = {};
+  const result = { topLevel: null, profile: null };
+
+  // Parse sections within comment block
+  let section = null;
   for (const line of lines.split('\n')) {
+    const secMatch = line.match(/^#\s*\[(top-level|profiles\.default)\]/);
+    if (secMatch) {
+      section = secMatch[1];
+      continue;
+    }
+    if (!section) continue;
+    if (line === '# (none)') continue;
     const kvMatch = line.match(/^#\s*(\w+)\s*=\s*(.+)$/);
-    if (kvMatch) kv[kvMatch[1]] = kvMatch[2].replace(/^["']|["']$/g, '').trim();
+    if (kvMatch) {
+      const val = kvMatch[2].replace(/^["']|["']$/g, '').trim();
+      if (section === 'top-level') {
+        if (!result.topLevel) result.topLevel = {};
+        result.topLevel[kvMatch[1]] = val;
+      } else {
+        if (!result.profile) result.profile = {};
+        result.profile[kvMatch[1]] = val;
+      }
+    }
   }
-  return Object.keys(kv).length ? kv : null;
+  return (result.topLevel || result.profile) ? result : null;
 }
 
-function parseDefaultFromBackup() {
+function parseFromBackup() {
   const backupPath = `${CODEX_CONFIG_PATH}.deepseek-backup`;
   if (!fs.existsSync(backupPath)) return null;
-  return parseDefaultProfile(fs.readFileSync(backupPath, 'utf-8'));
+  const content = fs.readFileSync(backupPath, 'utf-8');
+  const topLevel = parseTopLevelSettings(content);
+  const profile = parseDefaultProfile(content);
+  return (topLevel || profile) ? { topLevel, profile } : null;
 }
 
 function readManagedBlock(content) {
@@ -80,15 +103,55 @@ function readManagedBlock(content) {
   return m ? m[0] : null;
 }
 
-function originalDefaultsComment(original) {
-  if (!original || Object.keys(original).length === 0) return '(none)';
-  return Object.entries(original).map(([k, v]) => `# ${k} = ${JSON.stringify(String(v))}`).join('\n');
+// Extract the part of content before any [section] header — these are the true top-level keys.
+function topLevelRegion(content) {
+  const idx = content.search(/^\[/m);
+  return idx === -1 ? content : content.slice(0, idx);
 }
 
-function managedBlock(config, original) {
+function parseTopLevelSettings(content) {
+  const region = topLevelRegion(content);
+  const kv = {};
+  for (const key of TOP_LEVEL_KEYS) {
+    const m = region.match(new RegExp(`^${key}\\s*=\\s*["']?([^"'\n]+)["']?\\s*$`, 'm'));
+    if (m) kv[key] = m[1].trim();
+  }
+  return Object.keys(kv).length ? kv : null;
+}
+
+function stripTopLevelSettings(content) {
+  const tlr = topLevelRegion(content);
+  if (!tlr) return content.trim();
+  let result = tlr;
+  for (const key of TOP_LEVEL_KEYS) {
+    result = result.replace(new RegExp(`^${key}\\s*=\\s*["']?[^"'\n]+["']?\\s*\\n?`, 'm'), '');
+  }
+  // Re-attach the sectioned portion
+  const idx = content.search(/^\[/m);
+  const sections = idx === -1 ? '' : content.slice(idx);
+  result = (result.trim() + '\n\n' + sections).trim();
+  return result.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function originalDefaultsComment(original, topLevel) {
+  const parts = [];
+  if (topLevel && Object.keys(topLevel).length > 0) {
+    parts.push('# [top-level]');
+    parts.push(...Object.entries(topLevel).map(([k, v]) => `# ${k} = ${JSON.stringify(String(v))}`));
+  }
+  if (!original || Object.keys(original).length === 0) {
+    parts.push('# [profiles.default]\n# (none)');
+  } else {
+    parts.push('# [profiles.default]');
+    parts.push(...Object.entries(original).map(([k, v]) => `# ${k} = ${JSON.stringify(String(v))}`));
+  }
+  return parts.join('\n');
+}
+
+function managedBlock(config, original, topLevel) {
   const model = config.model || 'deepseek-v4-pro';
   const effort = normalizeEffort(config);
-  const origStr = originalDefaultsComment(original);
+  const origStr = originalDefaultsComment(original, topLevel);
   return `${START}
 [model_providers.deepseek_local]
 name = "DeepSeek Local Proxy"
@@ -113,9 +176,14 @@ ${END}`;
 function patch(config = {}) {
   ensureDir();
   backup();
-  const stripped = stripManagedBlock(read());
-  const original = parseDefaultProfile(stripped);
-  const next = `${stripped}\n\n${managedBlock(config, original)}\n`.trimStart();
+  let content = read();
+  content = stripManagedBlock(content);
+  // 备份原始顶层设置以便 restore；patch 阶段不主动覆盖顶层，
+  // 仅通过 [profiles.default] managed block 接管 codex 默认 profile。
+  const originalTopLevel = parseTopLevelSettings(content);
+  const originalProfile = parseDefaultProfile(content);
+
+  const next = `${content}\n\n${managedBlock(config, originalProfile, originalTopLevel)}\n`.trimStart();
   fs.writeFileSync(CODEX_CONFIG_PATH, next);
 }
 
@@ -123,19 +191,27 @@ function restore() {
   if (!fs.existsSync(CODEX_CONFIG_PATH)) return false;
   const current = read();
 
-  // 尝试从注释提取原始 default profile
-  let original = parseOriginalFromComments(current);
+  // 尝试从注释提取原始配置
+  let parsed = parseOriginalFromComments(current);
 
   // Fallback: 从 backup 文件提取
-  if (!original) original = parseDefaultFromBackup();
+  if (!parsed) parsed = parseFromBackup();
 
   let next = stripManagedBlock(current);
+  // 同时清理我们在顶层写过的 deepseek 覆盖值
+  next = stripTopLevelSettings(next);
 
-  // 写回原始 default profile
-  if (original && !original.none) {
+  // 写回 top-level settings
+  if (parsed && parsed.topLevel && Object.keys(parsed.topLevel).length > 0) {
+    const topLines = Object.entries(parsed.topLevel).map(([k, v]) => `${k} = ${JSON.stringify(String(v))}`);
+    next = `${topLines.join('\n')}\n\n${next}`;
+  }
+
+  // 写回原始 [profiles.default]（仅当文件中没有时）
+  if (parsed && parsed.profile && Object.keys(parsed.profile).length > 0) {
     const existingDefaults = parseDefaultProfile(next);
     if (!existingDefaults) {
-      const lines = Object.entries(original).map(([k, v]) => `${k} = ${JSON.stringify(String(v))}`);
+      const lines = Object.entries(parsed.profile).map(([k, v]) => `${k} = ${JSON.stringify(String(v))}`);
       next = `${next}\n\n[profiles.default]\n${lines.join('\n')}\n`;
     }
   }
