@@ -180,16 +180,24 @@ function patch(config = {}) {
   backup();
   let content = read();
   content = stripManagedBlock(content);
-  // 备份原顶层 model/effort/provider 到 managed block 注释（restore 时还原）。
-  // 关键修复：必须 strip 顶层这些字段，否则 codex 实际优先用顶层 model 而非
-  // [profiles.default].model（实测 codex 0.128 行为）—— 这条之前在 Mac 上
-  // 没暴露是因为 Mac 用户 config.toml 顶层通常不显式设 model，到 Windows
-  // 用户（顶层有 model = "gpt-5.4"）就会破坏 [profiles.default] 接管。
+  // 备份原顶层 model/effort/provider 到 managed block 注释（restore 时还原）
   const originalTopLevel = parseTopLevelSettings(content);
   if (originalTopLevel) content = stripTopLevelSettings(content);
   const originalProfile = parseDefaultProfile(content);
 
-  const next = `${content}\n\n${managedBlock(config, originalProfile, originalTopLevel)}\n`.trimStart();
+  // 顶层写入 deepseek 覆盖：codex 0.128 在 ChatGPT 账号登录态下，顶层
+  // model_provider 是路由的决定性字段，[profiles.default] 在登录态下被
+  // 视为次要建议会被无视。Windows 用户实战暴露此问题（Mac 上因 v0.2 期间
+  // 残留而碰巧 work，不是设计 work）。
+  const model = config.model || 'deepseek-v4-pro';
+  const effort = normalizeEffort(config);
+  const topLevelOverride = [
+    `model = ${toTomlString(model)}`,
+    `model_reasoning_effort = ${toTomlString(effort)}`,
+    `model_provider = "deepseek_local"`,
+  ].join('\n');
+
+  const next = `${topLevelOverride}\n\n${content}\n\n${managedBlock(config, originalProfile, originalTopLevel)}\n`.trimStart();
   fs.writeFileSync(CODEX_CONFIG_PATH, next);
 }
 

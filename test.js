@@ -230,12 +230,13 @@ async function run() {
     assert.match(codexConfig, new RegExp(`base_url = "http://127.0.0.1:${proxyPort}/v1"`));
     assert.match(codexConfig, /experimental_bearer_token = "sk-test-key"/);
   });
-  check('strips original top-level model so [profiles.default] takes effect', () => {
-    // 关键：原顶层 model 必须被 strip，否则覆盖 [profiles.default].model（codex 实测优先级）
-    // managed block 之前的部分（用户原 config 区）不应再有顶层 model
+  check('writes top-level deepseek_local override so codex uses our proxy in login state', () => {
+    // 关键：codex 0.128 在 ChatGPT 账号登录态下，顶层 model_provider 是路由决定性字段
     const beforeManaged = codexConfig.split('# >>> deepseek-claude-setup')[0];
-    assert.doesNotMatch(beforeManaged, /^model\s*=/m);
-    assert.doesNotMatch(beforeManaged, /^model_reasoning_effort\s*=/m);
+    assert.match(beforeManaged, /^model = "deepseek-v4-flash"/m);
+    assert.match(beforeManaged, /^model_provider = "deepseek_local"/m);
+    // 原顶层 gpt-5.5 应被 strip，不再出现在 managed block 之前
+    assert.doesNotMatch(beforeManaged, /^model = "gpt-5\.5"/m);
     // 但原值必须保留在 managed block 注释里供 restore 用
     assert.match(codexConfig, /# model = "gpt-5\.5"/);
     assert.match(codexConfig, /# model_reasoning_effort = "high"/);

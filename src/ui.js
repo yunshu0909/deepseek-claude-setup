@@ -299,12 +299,12 @@ async function syncCodexPatchOnStartup(config, codexPatcher) {
     if (!cfgPath || !fs.existsSync(cfgPath)) return false;
     content = fs.readFileSync(cfgPath, 'utf-8');
   } catch { return false; }
-  // 检测旧版残留：managed block 之前的区域含顶层 model 或 model_reasoning_effort
+  // 检测旧版残留：managed block 之前的区域**缺**顶层 model_provider = "deepseek_local"
+  // codex 0.128 在 ChatGPT 账号登录态下，顶层 model_provider 是路由决定性字段。
+  // 旧 patcher 只写 [profiles.default] 不写顶层，登录用户会绕过 profile 走 ChatGPT。
   const beforeManaged = content.split('# >>> deepseek-claude-setup codex')[0];
-  const stale = /^model\s*=/m.test(beforeManaged)
-             || /^model_reasoning_effort\s*=/m.test(beforeManaged)
-             || /^model_provider\s*=/m.test(beforeManaged);
-  if (!stale) return false;
+  const hasOurOverride = /^model_provider\s*=\s*"deepseek_local"/m.test(beforeManaged);
+  if (hasOurOverride) return false;
   const s = spinner();
   s.start('检测到 Codex 配置需要升级，正在自动修复...');
   try {
