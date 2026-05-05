@@ -12,8 +12,7 @@ const ui = require('./src/ui');
 const pkg = require('./package.json');
 
 const REPO = 'yunshu0909/deepseek-claude-setup';
-// 当前测试期间用 windows-adapt 分支；合并 main 时改回 'main'
-const UPSTREAM_REF = 'windows-adapt';
+const UPSTREAM_REF = 'main';
 const SHA_CACHE = path.join(configStore.DIR, '.cli_sha');
 
 /**
