@@ -180,9 +180,13 @@ function patch(config = {}) {
   backup();
   let content = read();
   content = stripManagedBlock(content);
-  // 备份原始顶层设置以便 restore；patch 阶段不主动覆盖顶层，
-  // 仅通过 [profiles.default] managed block 接管 codex 默认 profile。
+  // 备份原顶层 model/effort/provider 到 managed block 注释（restore 时还原）。
+  // 关键修复：必须 strip 顶层这些字段，否则 codex 实际优先用顶层 model 而非
+  // [profiles.default].model（实测 codex 0.128 行为）—— 这条之前在 Mac 上
+  // 没暴露是因为 Mac 用户 config.toml 顶层通常不显式设 model，到 Windows
+  // 用户（顶层有 model = "gpt-5.4"）就会破坏 [profiles.default] 接管。
   const originalTopLevel = parseTopLevelSettings(content);
+  if (originalTopLevel) content = stripTopLevelSettings(content);
   const originalProfile = parseDefaultProfile(content);
 
   const next = `${content}\n\n${managedBlock(config, originalProfile, originalTopLevel)}\n`.trimStart();

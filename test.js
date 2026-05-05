@@ -230,8 +230,15 @@ async function run() {
     assert.match(codexConfig, new RegExp(`base_url = "http://127.0.0.1:${proxyPort}/v1"`));
     assert.match(codexConfig, /experimental_bearer_token = "sk-test-key"/);
   });
-  check('preserves original top-level model', () => {
-    assert.match(codexConfig, /model = "gpt-5.5"/);
+  check('strips original top-level model so [profiles.default] takes effect', () => {
+    // 关键：原顶层 model 必须被 strip，否则覆盖 [profiles.default].model（codex 实测优先级）
+    // managed block 之前的部分（用户原 config 区）不应再有顶层 model
+    const beforeManaged = codexConfig.split('# >>> deepseek-claude-setup')[0];
+    assert.doesNotMatch(beforeManaged, /^model\s*=/m);
+    assert.doesNotMatch(beforeManaged, /^model_reasoning_effort\s*=/m);
+    // 但原值必须保留在 managed block 注释里供 restore 用
+    assert.match(codexConfig, /# model = "gpt-5\.5"/);
+    assert.match(codexConfig, /# model_reasoning_effort = "high"/);
   });
   check('writes (none) for original defaults when no [profiles.default] existed', () => {
     assert.match(codexConfig, /# \(none\)/);
