@@ -91,6 +91,22 @@ function responsesInputToMessages(payload) {
   }
 
   let pendingReasoning = '';
+  let pendingToolCalls = []; // 连续 function_call 累积，合并成一条 assistant 消息
+
+  function flushToolCalls() {
+    if (pendingToolCalls.length === 0) return;
+    const msg = {
+      role: 'assistant',
+      content: null,
+      tool_calls: pendingToolCalls,
+    };
+    if (pendingReasoning) {
+      msg.reasoning_content = pendingReasoning;
+      pendingReasoning = '';
+    }
+    messages.push(msg);
+    pendingToolCalls = [];
+  }
 
   for (const item of payload.input || []) {
     if (item.type === 'reasoning') {
@@ -107,35 +123,29 @@ function responsesInputToMessages(payload) {
       continue;
     }
 
+    if (item.type === 'function_call') {
+      // 连续 function_call 累积到 pendingToolCalls，并行调用合并到同一条 assistant 消息
+      const callId = item.call_id || item.id;
+      pendingToolCalls.push({
+        id: callId,
+        type: 'function',
+        function: {
+          name: item.name || '',
+          arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {}),
+        },
+      });
+      continue;
+    }
+
+    // 遇到非 function_call 项：先把累积的 tool_calls flush 成 assistant 消息
+    flushToolCalls();
+
     if (item.type === 'message') {
       const role = item.role === 'developer' ? 'system' : item.role;
       const text = contentToText(item.content);
       if (text) messages.push({ role, content: text });
       // 文档：无 tool_call 的 reasoning_content 在上下文中会被忽略
       pendingReasoning = '';
-      continue;
-    }
-
-    if (item.type === 'function_call') {
-      const callId = item.call_id || item.id;
-      const msg = {
-        role: 'assistant',
-        content: null,
-        tool_calls: [{
-          id: callId,
-          type: 'function',
-          function: {
-            name: item.name || '',
-            arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {}),
-          },
-        }],
-      };
-      // 工具调用轮次必须带 reasoning_content（否则 DeepSeek 400）
-      if (pendingReasoning) {
-        msg.reasoning_content = pendingReasoning;
-        pendingReasoning = '';
-      }
-      messages.push(msg);
       continue;
     }
 
@@ -151,6 +161,9 @@ function responsesInputToMessages(payload) {
       continue;
     }
   }
+
+  // input 末尾可能有未 flush 的 pending tool_calls
+  flushToolCalls();
 
   if (!messages.some(m => m.role === 'user' || m.role === 'tool')) {
     messages.push({ role: 'user', content: 'Continue.' });

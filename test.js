@@ -608,6 +608,47 @@ async function run() {
     await new Promise(r => reasonCarryUpstream.server.close(r));
   }
 
+  // 并行工具调用：连续多个 function_call input 必须合并成一条 assistant 消息，
+  // 否则 DeepSeek 报 "insufficient tool messages following tool_calls"
+  console.log('\n-- codex: parallel function_calls merged --');
+  const parallelUpstream = await makeChatUpstream({ mode: 'text_only' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(parallelUpstream.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'list two dirs' }] },
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'parallel A and B' }] },
+        { type: 'function_call', call_id: 'call_1', name: 'ls', arguments: '{"dir":"a"}' },
+        { type: 'function_call', call_id: 'call_2', name: 'ls', arguments: '{"dir":"b"}' },
+        { type: 'function_call_output', call_id: 'call_1', output: 'a-content' },
+        { type: 'function_call_output', call_id: 'call_2', output: 'b-content' },
+      ],
+      stream: true,
+    });
+    const msgs = parallelUpstream.calls[0].body.messages;
+    check('parallel function_calls collapsed into one assistant message', () => {
+      const asstWithTools = msgs.filter(m => m.role === 'assistant' && m.tool_calls);
+      assert.strictEqual(asstWithTools.length, 1, `expected exactly 1 assistant tool_calls msg, got ${asstWithTools.length}`);
+      assert.strictEqual(asstWithTools[0].tool_calls.length, 2);
+      assert.strictEqual(asstWithTools[0].tool_calls[0].id, 'call_1');
+      assert.strictEqual(asstWithTools[0].tool_calls[1].id, 'call_2');
+      assert.strictEqual(asstWithTools[0].reasoning_content, 'parallel A and B');
+    });
+    check('tool messages immediately follow assistant tool_calls', () => {
+      const asstIdx = msgs.findIndex(m => m.role === 'assistant' && m.tool_calls);
+      assert.strictEqual(msgs[asstIdx + 1].role, 'tool');
+      assert.strictEqual(msgs[asstIdx + 1].tool_call_id, 'call_1');
+      assert.strictEqual(msgs[asstIdx + 2].role, 'tool');
+      assert.strictEqual(msgs[asstIdx + 2].tool_call_id, 'call_2');
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(r => parallelUpstream.server.close(r));
+  }
+
   // reasoning 在普通 message 之前应该被丢弃（文档：无 tool_call 的 reasoning 会被忽略）
   const reasonDropUpstream = await makeChatUpstream({ mode: 'text_only' });
   process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(reasonDropUpstream.port);
