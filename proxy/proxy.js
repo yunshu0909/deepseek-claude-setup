@@ -463,6 +463,15 @@ function streamChatToResponses(res, chatPayload, streamMode) {
   };
 
   const client = TARGET_PROTOCOL === 'http:' ? http : https;
+  // 透明重试：connect/TLS handshake 阶段失败时静默 retry 1 次。
+  // 安全前提：还没向 codex 客户端发任何 SSE 事件（res.headersSent=false 且
+  // 还没进 upstreamRes 回调）。一旦数据流开始就不能 retry，否则客户端会重复看到部分输出。
+  const MAX_RETRIES = 1;
+  const RETRY_DELAY_MS = 500;
+  let retriesLeft = MAX_RETRIES;
+  let upstreamConnected = false;
+
+  function attemptRequest() {
   const upstream = client.request({
     hostname: TARGET_HOST,
     port: TARGET_PORT,
@@ -471,6 +480,7 @@ function streamChatToResponses(res, chatPayload, streamMode) {
     headers: reqHeaders,
     rejectUnauthorized: process.env.DEEPSEEK_CLAUDE_STRICT_TLS === '1',
   }, upstreamRes => {
+    upstreamConnected = true;  // 进入此回调代表 connect+TLS 都成功，禁止重试
     if (streamMode === 'stream') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
     }
@@ -567,12 +577,21 @@ function streamChatToResponses(res, chatPayload, streamMode) {
   });
 
   upstream.on('error', err => {
-    log(`ERROR [responses]: ${err.message}`);
+    const canRetry = !upstreamConnected && !res.headersSent && retriesLeft > 0;
+    log(`ERROR [responses]: ${err.message}${canRetry ? ` (retry in ${RETRY_DELAY_MS}ms, ${retriesLeft} left)` : ''}`);
+    if (canRetry) {
+      retriesLeft--;
+      setTimeout(attemptRequest, RETRY_DELAY_MS);
+      return;
+    }
     if (!streamTerminated) emitFailed({ code: 'connection_error', message: err.message });
   });
 
   upstream.write(bodyOut);
   upstream.end();
+  }
+
+  attemptRequest();
 }
 
 /**
@@ -710,6 +729,10 @@ const server = http.createServer((req, res) => {
 
     const client = TARGET_PROTOCOL === 'http:' ? http : https;
     const reqStartTs = Date.now();
+    // 与 Codex 路径同样的透明重试：connect/TLS 阶段失败时静默 retry 1 次
+    let anthropicRetriesLeft = 1;
+    let anthropicConnected = false;
+    function anthropicAttempt() {
     const upstream = client.request({
       hostname: TARGET_HOST,
       port: TARGET_PORT,
@@ -718,6 +741,7 @@ const server = http.createServer((req, res) => {
       headers,
       rejectUnauthorized: process.env.DEEPSEEK_CLAUDE_STRICT_TLS === '1',
     }, upstreamRes => {
+      anthropicConnected = true;
       if (res.headersSent) return;
       res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
 
@@ -794,7 +818,13 @@ const server = http.createServer((req, res) => {
     });
 
     upstream.on('error', err => {
-      log(`ERROR: ${err.message}`);
+      const canRetry = !anthropicConnected && !res.headersSent && anthropicRetriesLeft > 0;
+      log(`ERROR: ${err.message}${canRetry ? ' (retry in 500ms)' : ''}`);
+      if (canRetry) {
+        anthropicRetriesLeft--;
+        setTimeout(anthropicAttempt, 500);
+        return;
+      }
       if (!res.headersSent) {
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
@@ -803,6 +833,8 @@ const server = http.createServer((req, res) => {
 
     upstream.write(bodyOut);
     upstream.end();
+    }
+    anthropicAttempt();
   });
 });
 

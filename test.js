@@ -879,6 +879,46 @@ async function run() {
     await new Promise(resolve => streamArgsUpstream.server.close(resolve));
   }
 
+  // 透明重试：第一次连接被对方 destroy（模拟 TLS bad record / ECONNRESET），
+  // 代理应该静默 retry，客户端不感知失败
+  console.log('\n-- codex: transient connection error transparent retry --');
+  let firstReqDestroyed = false;
+  const flakyServer = http.createServer((req, res) => {
+    if (!firstReqDestroyed) {
+      firstReqDestroyed = true;
+      req.socket.destroy();
+      return;
+    }
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'retry-ok' } }] })}\n\n`);
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      res.end('data: [DONE]\n\n');
+    });
+  });
+  const flakyPort = await new Promise(resolve => {
+    flakyServer.listen(0, '127.0.0.1', () => resolve(flakyServer.address().port));
+  });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(flakyPort);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    const response = await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
+      stream: true,
+    });
+    check('transient connection error → transparent retry → success', () => {
+      assert.match(response.body, /retry-ok/);
+      assert.doesNotMatch(response.body, /response\.failed/);
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(r => flakyServer.close(r));
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   fs.rmSync(tmp, { recursive: true, force: true });
   if (failed > 0) process.exit(1);
