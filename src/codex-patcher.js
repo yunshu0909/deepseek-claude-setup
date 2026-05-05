@@ -225,6 +225,22 @@ function patch(config = {}) {
   fs.writeFileSync(CODEX_CONFIG_PATH, next);
 }
 
+/**
+ * 过滤"原顶层"里 v0.2 残留的我们自己的污染，不能当作用户原值还原
+ *
+ * 实战：用户 .deepseek-backup 里可能保存的"原顶层"已经包含 model_provider="deepseek_local"
+ * 或 model="deepseek-v4-*"（这是 v0.2 旧 patcher 写入但来不及消毒的污染）。
+ * restore 时若机械还原会写回 deepseek_local 引用 → managed block 已删 →
+ * codex 找不到 [model_providers.deepseek_local] 报 'not found'。
+ */
+function sanitizeOriginalTopLevel(topLevel) {
+  if (!topLevel) return topLevel;
+  const cleaned = { ...topLevel };
+  if (cleaned.model_provider === 'deepseek_local') delete cleaned.model_provider;
+  if (typeof cleaned.model === 'string' && /^deepseek-v4-/.test(cleaned.model)) delete cleaned.model;
+  return Object.keys(cleaned).length ? cleaned : null;
+}
+
 function restore() {
   if (!fs.existsSync(CODEX_CONFIG_PATH)) return false;
   const current = read();
@@ -235,9 +251,14 @@ function restore() {
   // Fallback: 从 backup 文件提取
   if (!parsed) parsed = parseFromBackup();
 
+  // 消毒 v0.2 残留的污染 topLevel（避免还原回死引用）
+  if (parsed) parsed = { ...parsed, topLevel: sanitizeOriginalTopLevel(parsed.topLevel) };
+
   let next = stripManagedBlock(current);
-  // 同时清理我们在顶层写过的 deepseek 覆盖值
+  // 清理我们在顶层写过的 deepseek 覆盖值
   next = stripTopLevelSettings(next);
+  // 关键：清理任何游离的 [model_providers.deepseek_local] section（v0.2 残留 / 双 section）
+  next = stripStrayTomlSection(next, '[model_providers.deepseek_local]');
 
   // 写回 top-level settings
   if (parsed && parsed.topLevel && Object.keys(parsed.topLevel).length > 0) {
