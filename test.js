@@ -649,6 +649,48 @@ async function run() {
     await new Promise(r => parallelUpstream.server.close(r));
   }
 
+  // 关键回归：连续 assistant 行为（reasoning -> message -> function_call 没有独立 reasoning）
+  // 第二个 assistant tool_calls 应该 fallback 到上一次 reasoning 作为 reasoning_content，
+  // 否则 DeepSeek 报 "reasoning_content must be passed back"
+  const reasonFallbackUpstream = await makeChatUpstream({ mode: 'text_only' });
+  process.env.DEEPSEEK_CLAUDE_TARGET_PORT = String(reasonFallbackUpstream.port);
+  configStore.write(cfg);
+  await proxyManager.start();
+  try {
+    await requestJson(proxyPort, '/v1/responses', {
+      model: 'gpt-5.5',
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'do things' }] },
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'plan A' }] },
+        { type: 'function_call', call_id: 'call_a', name: 'tool_a', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'call_a', output: 'a-result' },
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'analyze A then act B' }] },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'A done; now B' }] },
+        // 注意：这里没有独立的 reasoning，但下一个 function_call 仍需要 reasoning_content
+        { type: 'function_call', call_id: 'call_b', name: 'tool_b', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'call_b', output: 'b-result' },
+      ],
+      stream: true,
+    });
+    const msgs = reasonFallbackUpstream.calls[0].body.messages;
+    check('orphan function_call after assistant message reuses last reasoning', () => {
+      const fcMessages = msgs.filter(m => m.role === 'assistant' && m.tool_calls);
+      assert.strictEqual(fcMessages.length, 2, 'expected 2 assistant tool_calls messages');
+      // 第一个 fc 消息 reasoning 来自 'plan A'
+      assert.strictEqual(fcMessages[0].reasoning_content, 'plan A');
+      // 第二个 fc 消息没自己的 reasoning，应 fallback 到刚才的 'analyze A then act B'
+      assert.strictEqual(fcMessages[1].reasoning_content, 'analyze A then act B');
+    });
+    check('assistant text message between function_calls keeps its own reasoning', () => {
+      const asstText = msgs.find(m => m.role === 'assistant' && m.content && m.content.includes('A done'));
+      assert.ok(asstText);
+      assert.strictEqual(asstText.reasoning_content, 'analyze A then act B');
+    });
+  } finally {
+    await proxyManager.stop();
+    await new Promise(r => reasonFallbackUpstream.server.close(r));
+  }
+
   // reasoning 不附加给 user 消息；仅附加给 assistant（文档：无 tool_call 的 reasoning
   // 传过去 DeepSeek 会忽略，所以无差别附加 assistant 是最安全的）
   const reasonUserUpstream = await makeChatUpstream({ mode: 'text_only' });

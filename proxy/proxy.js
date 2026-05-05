@@ -90,8 +90,24 @@ function responsesInputToMessages(payload) {
     messages.push({ role: 'system', content: payload.instructions });
   }
 
-  let pendingReasoning = '';
-  let pendingToolCalls = []; // 连续 function_call 累积，合并成一条 assistant 消息
+  let pendingReasoning = '';      // 当前轮次内累积、待消化的新 reasoning
+  let lastReasoning = '';         // 最近消化过的 reasoning，作为后续 assistant 行为的 fallback
+  let pendingToolCalls = [];      // 连续 function_call 累积，合并成一条 assistant 消息
+
+  // DeepSeek 规则：含工具调用的轮次（两 user 之间）所有 assistant 的 reasoning_content 必须回传。
+  // codex 的 input 里 reasoning 与 assistant 行为不一定 1:1（一段 reasoning 后可能跟
+  // assistant message + function_call 多个 assistant 行为），所以 reasoning 被消化后
+  // 也要保留作为 fallback，让后续没有自己 reasoning 的 assistant 行为复用。
+  // user 消息出现时清空两个状态（开启新轮次）。
+  function consumeReasoning() {
+    if (pendingReasoning) {
+      lastReasoning = pendingReasoning;
+      const v = pendingReasoning;
+      pendingReasoning = '';
+      return v;
+    }
+    return lastReasoning;
+  }
 
   function flushToolCalls() {
     if (pendingToolCalls.length === 0) return;
@@ -100,10 +116,8 @@ function responsesInputToMessages(payload) {
       content: null,
       tool_calls: pendingToolCalls,
     };
-    if (pendingReasoning) {
-      msg.reasoning_content = pendingReasoning;
-      pendingReasoning = '';
-    }
+    const reasoning = consumeReasoning();
+    if (reasoning) msg.reasoning_content = reasoning;
     messages.push(msg);
     pendingToolCalls = [];
   }
@@ -124,7 +138,6 @@ function responsesInputToMessages(payload) {
     }
 
     if (item.type === 'function_call') {
-      // 连续 function_call 累积到 pendingToolCalls，并行调用合并到同一条 assistant 消息
       const callId = item.call_id || item.id;
       pendingToolCalls.push({
         id: callId,
@@ -143,21 +156,26 @@ function responsesInputToMessages(payload) {
     if (item.type === 'message') {
       const role = item.role === 'developer' ? 'system' : item.role;
       const text = contentToText(item.content);
+      if (role === 'user') {
+        // 新轮次开始：清空所有 reasoning 状态
+        pendingReasoning = '';
+        lastReasoning = '';
+        if (text) messages.push({ role: 'user', content: text });
+        continue;
+      }
       if (text) {
         const msg = { role, content: text };
-        // assistant 消息也要附加 reasoning_content：DeepSeek 文档规定
-        // "在两个 user 之间如果有工具调用，所有 assistant 的 reasoning_content
-        // 必须回传"。无工具调用时传过去 DeepSeek 会忽略，所以无差别附加最安全
-        if (role === 'assistant' && pendingReasoning) {
-          msg.reasoning_content = pendingReasoning;
+        if (role === 'assistant') {
+          const reasoning = consumeReasoning();
+          if (reasoning) msg.reasoning_content = reasoning;
         }
         messages.push(msg);
-      } else if (role === 'assistant' && pendingReasoning) {
-        // text 为空但有 reasoning（极少见但可能）
-        messages.push({ role: 'assistant', content: null, reasoning_content: pendingReasoning });
+      } else if (role === 'assistant') {
+        const reasoning = consumeReasoning();
+        if (reasoning) {
+          messages.push({ role: 'assistant', content: null, reasoning_content: reasoning });
+        }
       }
-      // 用掉就清空（每条 reasoning 绑定到下一个 assistant 行为）
-      pendingReasoning = '';
       continue;
     }
 
@@ -174,7 +192,6 @@ function responsesInputToMessages(payload) {
     }
   }
 
-  // input 末尾可能有未 flush 的 pending tool_calls
   flushToolCalls();
 
   if (!messages.some(m => m.role === 'user' || m.role === 'tool')) {
@@ -627,12 +644,14 @@ const server = http.createServer((req, res) => {
   }
 
   // Codex 启动时拉取模型列表
+  // supported_reasoning_levels 必填且是 ReasoningEffortPreset 结构体数组（不是字符串）。
+  // 结构体格式我们不确定，给空数组绕过解析（codex 有 fallback 到 -c 配置）
   if (req.method === 'GET' && req.url.startsWith('/v1/models')) {
     const modelId = CONFIG.model || 'deepseek-v4-pro';
     const modelEntry = {
       id: modelId, object: 'model', created: 1700000000, owned_by: 'deepseek',
       slug: modelId, display_name: modelId,
-      supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      supported_reasoning_levels: [],
     };
     const body = JSON.stringify({
       object: 'list',
