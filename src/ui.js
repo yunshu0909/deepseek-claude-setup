@@ -284,9 +284,43 @@ async function syncProxyOnStartup(config, proxyManager, autostart) {
   return true;
 }
 
+/**
+ * 主面板启动自检：codex 接入开着但 config.toml 是旧 patcher 写的（顶层未 strip
+ * model/effort/provider）→ 自动用最新 patcher 重写一次，让用户无感升级。
+ *
+ * 旧 patcher（< v1.4.0-rc）只写 [profiles.default] 接管，但顶层用户原 model
+ * 字段仍在，被 codex 优先用导致接管失效。新 patcher 会 strip 顶层并存到注释。
+ */
+async function syncCodexPatchOnStartup(config, codexPatcher) {
+  if (!codexPatcher?.isPatched?.()) return false;
+  const fs = require('fs');
+  let content = '';
+  try {
+    const cfgPath = codexPatcher.CODEX_CONFIG_PATH;
+    if (!cfgPath || !fs.existsSync(cfgPath)) return false;
+    content = fs.readFileSync(cfgPath, 'utf-8');
+  } catch { return false; }
+  // 检测旧版残留：managed block 之前的区域含顶层 model 或 model_reasoning_effort
+  const beforeManaged = content.split('# >>> deepseek-claude-setup codex')[0];
+  const stale = /^model\s*=/m.test(beforeManaged)
+             || /^model_reasoning_effort\s*=/m.test(beforeManaged)
+             || /^model_provider\s*=/m.test(beforeManaged);
+  if (!stale) return false;
+  const s = spinner();
+  s.start('检测到 Codex 配置需要升级，正在自动修复...');
+  try {
+    codexPatcher.patch(config);
+    s.stop('✅ Codex 配置已升级（顶层 model 已 strip，[profiles.default] 现在生效）');
+  } catch (err) {
+    s.stop(`⚠ 自动修复失败：${err.message}`);
+  }
+  return true;
+}
+
 // 主面板
 async function mainPanel(config, proxyManager, autostart, settingsPatcher, codexPatcher) {
   await syncProxyOnStartup(config, proxyManager, autostart);
+  await syncCodexPatchOnStartup(config, codexPatcher);
   while (true) {
     config.thinking = config.thinking || 'enabled';
     const running = await proxyManager.isRunning();
