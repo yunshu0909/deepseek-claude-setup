@@ -299,12 +299,18 @@ async function syncCodexPatchOnStartup(config, codexPatcher) {
     if (!cfgPath || !fs.existsSync(cfgPath)) return false;
     content = fs.readFileSync(cfgPath, 'utf-8');
   } catch { return false; }
-  // 检测旧版残留：managed block 之前的区域**缺**顶层 model_provider = "deepseek_local"
-  // codex 0.128 在 ChatGPT 账号登录态下，顶层 model_provider 是路由决定性字段。
-  // 旧 patcher 只写 [profiles.default] 不写顶层，登录用户会绕过 profile 走 ChatGPT。
+  // 检测两类需要重 patch 的情况：
+  // (1) 文件里有重复的 [model_providers.deepseek_local] / [profiles.default]
+  //     （v0.2 残留 / 手工编辑导致 TOML 1.0 同表重复，codex 解析吞表 → 报
+  //     "Model provider 'deepseek_local' not found"）
+  // (2) managed block 之前缺顶层 model_provider = "deepseek_local"
+  //     （codex 0.128 登录态下顶层 model_provider 是路由决定性字段）
   const beforeManaged = content.split('# >>> deepseek-claude-setup codex')[0];
+  const providerHeaderCount = (content.match(/^\[model_providers\.deepseek_local\]/gm) || []).length;
+  const profileHeaderCount = (content.match(/^\[profiles\.default\]/gm) || []).length;
+  const hasDuplicate = providerHeaderCount > 1 || profileHeaderCount > 1;
   const hasOurOverride = /^model_provider\s*=\s*"deepseek_local"/m.test(beforeManaged);
-  if (hasOurOverride) return false;
+  if (hasOurOverride && !hasDuplicate) return false;
   const s = spinner();
   s.start('检测到 Codex 配置需要升级，正在自动修复...');
   try {

@@ -36,6 +36,25 @@ function stripManagedBlock(content) {
   return content.replace(pattern, '\n').replace(/\n{3,}/g, '\n\n').trimEnd();
 }
 
+/**
+ * 清掉游离在 managed block 之外的同名 section（避免 TOML 1.0 同表重复定义错误）
+ *
+ * 实战触发：v0.2 旧 patcher 残留、用户手工编辑、异常退出会留下裸的
+ *   [model_providers.deepseek_local] 或 [profiles.default] 段在 managed block 之外。
+ * patch 时再写 managed block → 文件出现两个同名表 → TOML 1.0 不允许 →
+ * codex 报 "Model provider 'deepseek_local' not found"（整个 model_providers 表被吞）。
+ *
+ * @param {string} content - 已 stripManagedBlock 后的 content
+ * @param {string} sectionHeader - 例如 '[model_providers.deepseek_local]' 或 '[profiles.default]'
+ * @returns {string} 删除该 section 整段（直到下一个 [...] 或文件末）后的 content
+ */
+function stripStrayTomlSection(content, sectionHeader) {
+  // 匹配从 sectionHeader 到下一个 ^[...] 或文件末（不含下一段 header）
+  const escaped = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`(^|\\n)${escaped}\\s*\\n[\\s\\S]*?(?=\\n\\[|$)`, 'g');
+  return content.replace(pattern, '').replace(/\n{3,}/g, '\n\n').trimEnd();
+}
+
 function toTomlString(value) {
   return JSON.stringify(String(value));
 }
@@ -180,6 +199,11 @@ function patch(config = {}) {
   backup();
   let content = read();
   content = stripManagedBlock(content);
+  // 关键：清理游离的同名 section（避免 TOML 1.0 同表重复定义导致 codex 解析失败）
+  // v0.2 残留 / 手工编辑 / 异常退出会留下裸的 [model_providers.deepseek_local]
+  // 或 [profiles.default] 在 managed block 之外。下一次 patch 写 managed block →
+  // 文件出现双 section → TOML 解析吞表 → codex 报 "Model provider not found"
+  content = stripStrayTomlSection(content, '[model_providers.deepseek_local]');
   // 备份原顶层 model/effort/provider 到 managed block 注释（restore 时还原）
   const originalTopLevel = parseTopLevelSettings(content);
   if (originalTopLevel) content = stripTopLevelSettings(content);
