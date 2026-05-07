@@ -1,4 +1,14 @@
 #!/usr/bin/env node
+/**
+ * CLI 入口
+ *
+ * 负责：
+ * - 检查 GitHub main 是否有新版并自动升级
+ * - 读取/创建本地 Provider Gateway 配置
+ * - 启动交互式主面板并注入代理、启动项、patcher 依赖
+ *
+ * @module cli
+ */
 const { intro, outro } = require('@clack/prompts');
 const https = require('https');
 const fs = require('fs');
@@ -116,7 +126,7 @@ async function main() {
   // 启动时检查 GitHub 最新 commit（1.5s 超时，无网静默跳过）
   await checkForUpdate();
 
-  const config = configStore.read();
+  const config = configStore.readNormalized();
 
   if (!config) {
     // 首次使用 → 配置向导

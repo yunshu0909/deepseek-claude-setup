@@ -1,5 +1,16 @@
+/**
+ * 交互式配置面板
+ *
+ * 负责：
+ * - 引导用户配置 DeepSeek 模型、API Key 与思考模式
+ * - 接入/关闭 Claude Code 与 Codex 的本地代理配置
+ * - 启动时同步代理文件包与旧版 Codex 配置
+ *
+ * @module ui
+ */
 const { intro, outro, text, select, confirm, spinner, note, cancel, isCancel } = require('@clack/prompts');
 const configStore = require('./config-store');
+const proxyBundle = require('./proxy-bundle');
 const verifier = require('./verifier');
 
 /**
@@ -116,7 +127,7 @@ async function configWizard(existing) {
     if (effort === null) { outro('已取消'); return null; }
   }
 
-  const cfg = { apiKey, model, thinking, effort };
+  const cfg = configStore.normalizeConfig({ apiKey, model, thinking, effort });
 
   if (!await stepConfirm(cfg)) {
     outro('已取消');
@@ -129,31 +140,18 @@ async function configWizard(existing) {
 }
 
 /**
- * 把代理脚本复制到 ~/.deepseek-claude/proxy.js
+ * 把代理文件包复制到 ~/.deepseek-claude/
  * @returns {boolean} true 表示文件被更新（首次部署或内容变化），false 表示已是最新无需更新
  */
 function deployProxyScript() {
-  const fs = require('fs');
-  const path = require('path');
-  const src = path.join(__dirname, '..', 'proxy', 'proxy.js');
-  const dst = path.join(configStore.DIR, 'proxy.js');
-  fs.mkdirSync(path.dirname(dst), { recursive: true });
-
-  // 内容比对避免不必要的 restart：包升级后才会触发文件变化
-  const newContent = fs.readFileSync(src, 'utf-8');
-  let oldContent = '';
-  try { oldContent = fs.readFileSync(dst, 'utf-8'); } catch {}
-  if (oldContent === newContent) return false;
-
-  fs.writeFileSync(dst, newContent);
-  return true;
+  return proxyBundle.deployProxyBundle(configStore.DIR);
 }
 
 /**
- * 确保代理在跑且使用最新版 proxy.js
+ * 确保代理在跑且使用最新版代理文件包
  *
  * 关键行为：
- * - 包升级后（npm 包/node 模块更新）proxy.js 内容变化 → 即使代理在跑也会自动 restart 用新代码
+ * - 包升级后（npm 包/node 模块更新）代理文件变化 → 即使代理在跑也会自动 restart 用新代码
  * - 用户不需要手动「关闭接入再重新开启」来升级
  * - 文件无变化时已运行的代理不动
  */
@@ -173,7 +171,7 @@ async function ensureProxyRunning(config, proxyManager, autostart) {
 
 /**
  * 重启代理使新 config（model/thinking/effort）生效。代理只在启动时读 config.json 一次。
- * 同时会顺带带上最新 proxy.js
+ * 同时会顺带带上最新代理文件包
  */
 async function restartProxy(config, proxyManager, autostart) {
   await proxyManager.stop();
@@ -261,22 +259,12 @@ async function disableCodex(proxyManager, autostart, settingsPatcher, codexPatch
 }
 
 /**
- * 主面板启动自检：代理在跑但 proxy.js 已升级时自动重启使用新代码。
+ * 主面板启动自检：代理在跑但代理文件包已升级时自动重启使用新代码。
  * 用户感知：执行 npx/node cli.js 进入主面板就用上最新版本，无需手动「关再开」
  */
 async function syncProxyOnStartup(config, proxyManager, autostart) {
   if (!await proxyManager.isRunning()) return false;
-  const fs = require('fs');
-  const path = require('path');
-  const src = path.join(__dirname, '..', 'proxy', 'proxy.js');
-  const dst = path.join(configStore.DIR, 'proxy.js');
-  let needsUpdate = false;
-  try {
-    const newC = fs.readFileSync(src, 'utf-8');
-    const oldC = fs.readFileSync(dst, 'utf-8');
-    needsUpdate = newC !== oldC;
-  } catch {}
-  if (!needsUpdate) return false;
+  if (proxyBundle.isProxyBundleCurrent(configStore.DIR)) return false;
   const s = spinner();
   s.start('检测到 proxy 已升级，正在重启代理使用最新代码...');
   try {

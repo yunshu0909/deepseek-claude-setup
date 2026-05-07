@@ -14,14 +14,11 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { responsesInputToMessages, responsesToolsToChatTools } = require('./codex-input');
+const runtimeConfig = require('./runtime-config');
 
 const CONFIG_DIR = process.env.DEEPSEEK_CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.deepseek-claude');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
-const TARGET_HOST = process.env.DEEPSEEK_CLAUDE_TARGET_HOST || 'api.deepseek.com';
-const TARGET_PATH_PREFIX = process.env.DEEPSEEK_CLAUDE_TARGET_PREFIX || '/anthropic';
-const OPENAI_TARGET_PATH_PREFIX = process.env.DEEPSEEK_CLAUDE_OPENAI_TARGET_PREFIX || '';
-const TARGET_PORT = process.env.DEEPSEEK_CLAUDE_TARGET_PORT ? Number(process.env.DEEPSEEK_CLAUDE_TARGET_PORT) : 443;
-const TARGET_PROTOCOL = process.env.DEEPSEEK_CLAUDE_TARGET_PROTOCOL || 'https:';
 const PORT = process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? Number(process.env.DEEPSEEK_CLAUDE_PROXY_PORT) : 17861;
 const SERVICE_NAME = 'deepseek-claude-proxy';
 
@@ -46,11 +43,59 @@ function generateCallId() {
   return `call_${crypto.randomBytes(12).toString('hex')}`;
 }
 
+function activeProviderConfig() {
+  return CONFIG.providers?.[CONFIG.activeProvider] || {};
+}
+
+function endpointFromUrl(rawUrl) {
+  const parsed = new URL(rawUrl);
+  const pathname = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/$/, '');
+  return {
+    protocol: parsed.protocol,
+    hostname: parsed.hostname,
+    port: parsed.port ? Number(parsed.port) : (parsed.protocol === 'http:' ? 80 : 443),
+    pathname,
+  };
+}
+
+function joinPath(prefix, suffix) {
+  const left = (prefix || '').replace(/\/$/, '');
+  const right = suffix.startsWith('/') ? suffix : `/${suffix}`;
+  return `${left}${right}`;
+}
+
+function legacyEnvTarget(pathPrefix, suffix) {
+  if (!process.env.DEEPSEEK_CLAUDE_TARGET_HOST) return null;
+  return {
+    protocol: process.env.DEEPSEEK_CLAUDE_TARGET_PROTOCOL || 'https:',
+    hostname: process.env.DEEPSEEK_CLAUDE_TARGET_HOST,
+    port: process.env.DEEPSEEK_CLAUDE_TARGET_PORT ? Number(process.env.DEEPSEEK_CLAUDE_TARGET_PORT) : 443,
+    path: joinPath(pathPrefix, suffix),
+  };
+}
+
+function chatTarget() {
+  const providerConfig = activeProviderConfig();
+  const chatPath = providerConfig.chatPath || '/chat/completions';
+  const legacy = legacyEnvTarget(process.env.DEEPSEEK_CLAUDE_OPENAI_TARGET_PREFIX || '', chatPath);
+  if (legacy) return legacy;
+  const endpoint = endpointFromUrl(providerConfig.baseUrl || 'https://api.deepseek.com');
+  return { ...endpoint, path: joinPath(endpoint.pathname, chatPath) };
+}
+
+function anthropicTarget(requestUrl) {
+  const legacy = legacyEnvTarget(process.env.DEEPSEEK_CLAUDE_TARGET_PREFIX || '/anthropic', requestUrl);
+  if (legacy) return legacy;
+  const endpoint = endpointFromUrl(activeProviderConfig().anthropicBaseUrl || 'https://api.deepseek.com/anthropic');
+  return { ...endpoint, path: joinPath(endpoint.pathname, requestUrl) };
+}
+
 function healthBody() {
   const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
   return JSON.stringify({
     service: SERVICE_NAME,
     ok: true,
+    provider: CONFIG.activeProvider || 'deepseek',
     model: CONFIG.model || 'deepseek-v4-pro',
     thinking,
     effort: thinking === 'enabled' ? normalizeEffort(CONFIG.effort || 'max') : null,
@@ -60,169 +105,6 @@ function healthBody() {
 function sendSse(res, event) {
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
-}
-
-function contentToText(content) {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.map(part => part.text || part.content || '').filter(Boolean).join('\n');
-}
-
-/**
- * 把 Codex Responses API 的 input 数组翻译成 OpenAI Chat Completions 的 messages
- *
- * 处理四类 input item：
- * - message：常规对话（user/assistant/developer）
- * - reasoning：Codex 在前轮响应里产生的思考记录，需要在工具调用轮次回传给 DeepSeek
- * - function_call：assistant 调用工具的历史记录
- * - function_call_output：工具结果回填
- *
- * DeepSeek 文档要求：
- * - 进行了工具调用的轮次，必须完整回传 reasoning_content，否则 400 报错
- * - 未进行工具调用的 assistant 轮次的 reasoning_content 会被忽略
- *
- * 翻译策略：累积 pendingReasoning，遇到 function_call 时附加到 assistant 消息；
- * 遇到普通 message 时清空（不带去下一轮）
- *
- * @param {object} payload - Responses API 请求体
- * @returns {Array<object>} Chat Completions messages
- */
-function responsesInputToMessages(payload) {
-  const messages = [];
-  if (payload.instructions) {
-    messages.push({ role: 'system', content: payload.instructions });
-  }
-
-  let pendingReasoning = '';      // 当前轮次内累积、待消化的新 reasoning
-  let lastReasoning = '';         // 最近消化过的 reasoning，作为后续 assistant 行为的 fallback
-  let pendingToolCalls = [];      // 连续 function_call 累积，合并成一条 assistant 消息
-
-  // DeepSeek 规则：含工具调用的轮次（两 user 之间）所有 assistant 的 reasoning_content 必须回传。
-  // codex 的 input 里 reasoning 与 assistant 行为不一定 1:1（一段 reasoning 后可能跟
-  // assistant message + function_call 多个 assistant 行为），所以 reasoning 被消化后
-  // 也要保留作为 fallback，让后续没有自己 reasoning 的 assistant 行为复用。
-  // user 消息出现时清空两个状态（开启新轮次）。
-  function consumeReasoning() {
-    if (pendingReasoning) {
-      lastReasoning = pendingReasoning;
-      const v = pendingReasoning;
-      pendingReasoning = '';
-      return v;
-    }
-    return lastReasoning;
-  }
-
-  function flushToolCalls() {
-    if (pendingToolCalls.length === 0) return;
-    const msg = {
-      role: 'assistant',
-      content: null,
-      tool_calls: pendingToolCalls,
-    };
-    const reasoning = consumeReasoning();
-    if (reasoning) msg.reasoning_content = reasoning;
-    messages.push(msg);
-    pendingToolCalls = [];
-  }
-
-  for (const item of payload.input || []) {
-    if (item.type === 'reasoning') {
-      // Codex 的 reasoning item 可能用 content[{type:'reasoning_text'}] 或 summary[{type:'summary_text'}]
-      const fromContent = (item.content || [])
-        .filter(c => c.type === 'reasoning_text' || c.type === 'reasoning')
-        .map(c => c.text || '')
-        .join('');
-      const fromSummary = (item.summary || [])
-        .filter(c => c.type === 'summary_text')
-        .map(c => c.text || '')
-        .join('');
-      pendingReasoning += fromContent || fromSummary;
-      continue;
-    }
-
-    if (item.type === 'function_call') {
-      const callId = item.call_id || item.id;
-      pendingToolCalls.push({
-        id: callId,
-        type: 'function',
-        function: {
-          name: item.name || '',
-          arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments || {}),
-        },
-      });
-      continue;
-    }
-
-    // 遇到非 function_call 项：先把累积的 tool_calls flush 成 assistant 消息
-    flushToolCalls();
-
-    if (item.type === 'message') {
-      const role = item.role === 'developer' ? 'system' : item.role;
-      const text = contentToText(item.content);
-      if (role === 'user') {
-        // 新轮次开始：清空所有 reasoning 状态
-        pendingReasoning = '';
-        lastReasoning = '';
-        if (text) messages.push({ role: 'user', content: text });
-        continue;
-      }
-      if (text) {
-        const msg = { role, content: text };
-        if (role === 'assistant') {
-          const reasoning = consumeReasoning();
-          if (reasoning) msg.reasoning_content = reasoning;
-        }
-        messages.push(msg);
-      } else if (role === 'assistant') {
-        const reasoning = consumeReasoning();
-        if (reasoning) {
-          messages.push({ role: 'assistant', content: null, reasoning_content: reasoning });
-        }
-      }
-      continue;
-    }
-
-    if (item.type === 'function_call_output') {
-      const tcId = item.call_id || item.tool_call_id || '';
-      let content = '';
-      if (item.output !== undefined) {
-        content = typeof item.output === 'string' ? item.output : JSON.stringify(item.output);
-      } else if (item.content !== undefined) {
-        content = typeof item.content === 'string' ? item.content : JSON.stringify(item.content);
-      }
-      messages.push({ role: 'tool', tool_call_id: tcId, content });
-      continue;
-    }
-  }
-
-  flushToolCalls();
-
-  if (!messages.some(m => m.role === 'user' || m.role === 'tool')) {
-    messages.push({ role: 'user', content: 'Continue.' });
-  }
-  return messages;
-}
-
-function responsesToolsToChatTools(tools) {
-  if (!Array.isArray(tools)) return undefined;
-  const functions = tools
-    .filter(tool => tool.type === 'function' && tool.name)
-    .map(tool => {
-      const params = {};
-      for (const [k, v] of Object.entries(tool.parameters || { type: 'object', properties: {} })) {
-        if (k === 'additionalProperties' || k === 'strict') continue; // DeepSeek 不接受
-        params[k] = v;
-      }
-      return {
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description || '',
-          parameters: params,
-        },
-      };
-    });
-  return functions.length ? functions : undefined;
 }
 
 /**
@@ -465,7 +347,8 @@ function streamChatToResponses(res, chatPayload, streamMode) {
     Authorization: `Bearer ${CONFIG.apiKey}`,
   };
 
-  const client = TARGET_PROTOCOL === 'http:' ? http : https;
+  const target = chatTarget();
+  const client = target.protocol === 'http:' ? http : https;
   // 透明重试：connect/TLS handshake 阶段失败时静默 retry 1 次。
   // 安全前提：还没向 codex 客户端发任何 SSE 事件（res.headersSent=false 且
   // 还没进 upstreamRes 回调）。一旦数据流开始就不能 retry，否则客户端会重复看到部分输出。
@@ -476,9 +359,9 @@ function streamChatToResponses(res, chatPayload, streamMode) {
 
   function attemptRequest() {
   const upstream = client.request({
-    hostname: TARGET_HOST,
-    port: TARGET_PORT,
-    path: `${OPENAI_TARGET_PATH_PREFIX}/chat/completions`,
+    hostname: target.hostname,
+    port: target.port,
+    path: target.path,
     method: 'POST',
     headers: reqHeaders,
     rejectUnauthorized: process.env.DEEPSEEK_CLAUDE_STRICT_TLS === '1',
@@ -634,8 +517,7 @@ function handleResponses(req, res, payload) {
 
 let CONFIG;
 try {
-  CONFIG = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-  if (!CONFIG.apiKey) throw new Error('缺少 apiKey');
+  CONFIG = runtimeConfig.readConfig(CONFIG_PATH);
 } catch (e) {
   log(`FATAL: 配置加载失败 - ${e.message}`);
   process.exit(1);
@@ -671,7 +553,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url.startsWith('/v1/models')) {
     const modelId = CONFIG.model || 'deepseek-v4-pro';
     const modelEntry = {
-      id: modelId, object: 'model', created: 1700000000, owned_by: 'deepseek',
+      id: modelId, object: 'model', created: 1700000000, owned_by: CONFIG.activeProvider || 'deepseek',
       slug: modelId, display_name: modelId,
       supported_reasoning_levels: [],
     };
@@ -730,16 +612,17 @@ const server = http.createServer((req, res) => {
     headers.authorization = `Bearer ${CONFIG.apiKey}`;
     headers['anthropic-version'] = headers['anthropic-version'] || '2023-06-01';
 
-    const client = TARGET_PROTOCOL === 'http:' ? http : https;
+    const target = anthropicTarget(req.url);
+    const client = target.protocol === 'http:' ? http : https;
     const reqStartTs = Date.now();
     // 与 Codex 路径同样的透明重试：connect/TLS 阶段失败时静默 retry 1 次
     let anthropicRetriesLeft = 1;
     let anthropicConnected = false;
     function anthropicAttempt() {
     const upstream = client.request({
-      hostname: TARGET_HOST,
-      port: TARGET_PORT,
-      path: TARGET_PATH_PREFIX + req.url,
+      hostname: target.hostname,
+      port: target.port,
+      path: target.path,
       method: 'POST',
       headers,
       rejectUnauthorized: process.env.DEEPSEEK_CLAUDE_STRICT_TLS === '1',
@@ -852,5 +735,5 @@ server.on('error', err => {
 
 server.listen(PORT, '127.0.0.1', () => {
   const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
-  log(`代理启动 localhost:${PORT} model=${CONFIG.model || 'deepseek-v4-pro'} thinking=${thinking} effort=${thinking === 'enabled' ? normalizeEffort(CONFIG.effort || 'max') : 'off'}`);
+  log(`代理启动 localhost:${PORT} provider=${CONFIG.activeProvider || 'deepseek'} model=${CONFIG.model || 'deepseek-v4-pro'} thinking=${thinking} effort=${thinking === 'enabled' ? normalizeEffort(CONFIG.effort || 'max') : 'off'}`);
 });

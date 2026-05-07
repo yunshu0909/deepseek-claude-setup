@@ -18,6 +18,8 @@ process.env.CODEX_CONFIG_PATH = codexConfigPath;
 process.env.DEEPSEEK_CLAUDE_PROXY_PORT = String(proxyPort);
 
 const configStore = require('./src/config-store');
+const providerRegistry = require('./src/providers');
+const proxyBundle = require('./src/proxy-bundle');
 const settingsPatcher = require('./src/settings-patcher');
 const codexPatcher = require('./src/codex-patcher');
 const proxyManager = require('./src/proxy-manager');
@@ -173,7 +175,7 @@ async function run() {
   fs.mkdirSync(configDir, { recursive: true });
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.mkdirSync(codexDir, { recursive: true });
-  fs.copyFileSync(path.join(__dirname, 'proxy', 'proxy.js'), path.join(configDir, 'proxy.js'));
+  proxyBundle.deployProxyBundle(configDir);
 
   const originalSettings = {
     env: {
@@ -195,6 +197,51 @@ async function run() {
   configStore.write(cfg);
   check('writes and reads selected model/effort', () => {
     assert.deepStrictEqual(configStore.read(), cfg);
+  });
+  check('normalizes legacy DeepSeek config into provider gateway shape', () => {
+    const normalized = configStore.readNormalized();
+    assert.strictEqual(normalized.activeProvider, 'deepseek');
+    assert.strictEqual(normalized.thinking, cfg.thinking);
+    assert.strictEqual(normalized.effort, cfg.effort);
+    assert.strictEqual(normalized.providers.deepseek.apiKey, cfg.apiKey);
+    assert.strictEqual(normalized.providers.deepseek.model, cfg.model);
+    assert.strictEqual(normalized.providers.deepseek.baseUrl, 'https://api.deepseek.com');
+    assert.strictEqual(normalized.providers.deepseek.chatPath, '/chat/completions');
+    assert.strictEqual(normalized.providers.deepseek.anthropicBaseUrl, 'https://api.deepseek.com/anthropic');
+    // v0.5 迁移期兼容：当前调用方仍能从顶层读取 active provider 的 key/model
+    assert.strictEqual(normalized.apiKey, cfg.apiKey);
+    assert.strictEqual(normalized.model, cfg.model);
+  });
+  configStore.write({
+    activeProvider: 'deepseek',
+    thinking: 'disabled',
+    effort: 'high',
+    providers: {
+      deepseek: { apiKey: 'sk-new', model: 'deepseek-v4-pro' },
+    },
+  });
+  check('normalizes provider config and keeps active provider compatibility fields', () => {
+    const normalized = configStore.readNormalized();
+    assert.strictEqual(normalized.activeProvider, 'deepseek');
+    assert.strictEqual(normalized.thinking, 'disabled');
+    assert.strictEqual(normalized.effort, 'high');
+    assert.strictEqual(normalized.apiKey, 'sk-new');
+    assert.strictEqual(normalized.model, 'deepseek-v4-pro');
+  });
+  configStore.write(cfg);
+
+  console.log('\n-- provider-registry --');
+  check('registers DeepSeek provider capabilities and defaults', () => {
+    const deepseek = providerRegistry.getProvider('deepseek');
+    assert.ok(deepseek);
+    assert.strictEqual(deepseek.displayName, 'DeepSeek');
+    assert.strictEqual(deepseek.capabilities.claudeCode, 'anthropic_forward');
+    assert.strictEqual(deepseek.capabilities.codex, 'chat_bridge');
+    assert.strictEqual(deepseek.capabilities.reasoningStream, 'native');
+    assert.strictEqual(deepseek.normalizeConfig({}).model, 'deepseek-v4-pro');
+  });
+  check('returns null for unknown provider ids', () => {
+    assert.strictEqual(providerRegistry.getProvider('unknown-provider'), null);
   });
 
   console.log('\n-- settings-patcher --');

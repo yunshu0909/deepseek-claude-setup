@@ -6,7 +6,7 @@
     "deepseek-claude-setup": "./cli.js"
   },
   "scripts": {
-    "test": "node test.js"
+    "test": "node test.js && node test/provider-runtime.test.js"
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0"
