@@ -6,7 +6,6 @@ const verifier = require('./verifier');
  * 跨平台终端 emoji 支持检测（PRD-003 §3.1）
  *
  * 正向检测 UTF-8 + TTY，不绑定 process.platform——让 Linux SSH / CI 等场景也能正确降级。
- * Phase 1 仅定义函数，Phase 3 才实际用 I_EMOJI / I_ASCII 替换主面板字符。
  *
  * @returns {boolean} 当前终端是否支持 emoji 渲染
  */
@@ -18,9 +17,15 @@ function supportsEmoji() {
   if (process.env.MSYSTEM) return true;            // Git Bash (MinTTY)
   // locale 显式声明 UTF-8
   if (/UTF-?8/i.test(process.env.LANG || process.env.LC_ALL || '')) return true;
-  // 兜底：旧 cmd / PowerShell 5.1 默认 console 都不设以上任何标志 → 走 ASCII
-  return false;
+  // macOS Terminal.app 默认 UTF-8 但环境变量可能不带 LANG（按 PRD-003 §3.1 兜底）
+  return process.platform === 'darwin';
 }
+
+// 主面板字符集：emoji 终端渲染好看；旧 cmd / PowerShell 5.1 走 ASCII 占位避免显示 ?
+// 键集合稳定，PRD-005 多 provider 时可按需扩展
+const I_EMOJI = { tool: '🔧', robot: '🤖', cmd: '⌘',   brain: '🧠', dot: '🟢', circle: '○', warn: '⚠',   cog: '⚙',   cross: '✕',   bye: '👋',     wrench: '🔧' };
+const I_ASCII = { tool: '[ ]', robot: '[C]', cmd: '[X]', brain: '[T]', dot: '*', circle: '○', warn: '[!]', cog: '[*]', cross: '[x]', bye: '[bye]', wrench: '[F]' };
+const I = supportsEmoji() ? I_EMOJI : I_ASCII;
 
 // 第一步：输入 API Key（带验证）
 async function stepApiKey(existing) {
@@ -94,7 +99,7 @@ async function stepConfirm(cfg) {
 
 // 完整配置向导
 async function configWizard(existing) {
-  intro('🔧 DeepSeek × Claude Code — 首次配置');
+  intro(`${I.tool} DeepSeek × Claude Code — 首次配置`);
 
   const apiKey = await stepApiKey(existing?.apiKey);
   if (apiKey === null) { outro('已取消'); return null; }
@@ -337,36 +342,36 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
     // 异常：有接入开启但代理没在跑（手动 kill 了代理或 LaunchAgent 没拉起来）
     const anomaly = anyEnabled && !running;
 
-    intro(`🔧 DeepSeek × Claude Code / Codex`);
-    const claudeLine = `Claude Code: ${claudePatched ? '🟢 已接入' : '○ 未接入'}`;
-    const codexLine = `Codex:       ${codexPatched ? '🟢 已接入 (直接 codex 即可使用)' : '○ 未接入'}`;
+    intro(`${I.tool} DeepSeek × Claude Code / Codex`);
+    const claudeLine = `Claude Code: ${claudePatched ? `${I.dot} 已接入` : `${I.circle} 未接入`}`;
+    const codexLine = `Codex:       ${codexPatched ? `${I.dot} 已接入 (直接 codex 即可使用)` : `${I.circle} 未接入`}`;
     const proxyLine = anomaly
-      ? '代理:        ⚠ 接入已开但代理未运行'
-      : (running ? '代理:        🟢 127.0.0.1:17861' : '代理:        ○ 未运行');
+      ? `代理:        ${I.warn} 接入已开但代理未运行`
+      : (running ? `代理:        ${I.dot} 127.0.0.1:17861` : `代理:        ${I.circle} 未运行`);
     note(
       `${claudeLine}\n${codexLine}\n${proxyLine}\n模型: ${config.model}  |  思考模式: ${thinkingText}`
     );
 
     const options = [];
     if (anomaly) {
-      options.push({ value: 'fix', label: '🔧 修复：重启代理' });
+      options.push({ value: 'fix', label: `${I.wrench} 修复：重启代理` });
     }
     options.push({
       value: claudePatched ? 'disable-claude' : 'enable-claude',
-      label: claudePatched ? '🤖 关闭 Claude Code 接入' : '🤖 开启 Claude Code 接入',
+      label: claudePatched ? `${I.robot} 关闭 Claude Code 接入` : `${I.robot} 开启 Claude Code 接入`,
     });
     if (codexPatcher) {
       options.push({
         value: codexPatched ? 'disable-codex' : 'enable-codex',
-        label: codexPatched ? '⌘ 关闭 Codex 接入' : '⌘ 开启 Codex 接入',
+        label: codexPatched ? `${I.cmd} 关闭 Codex 接入` : `${I.cmd} 开启 Codex 接入`,
       });
     }
     options.push({
       value: 'toggle-thinking',
-      label: config.thinking === 'disabled' ? '🧠 开启思考模式' : '🧠 关闭思考模式',
+      label: config.thinking === 'disabled' ? `${I.brain} 开启思考模式` : `${I.brain} 关闭思考模式`,
     });
-    options.push({ value: 'reconfig', label: '⚙ 修改配置' });
-    options.push({ value: 'quit', label: '✕ 退出' });
+    options.push({ value: 'reconfig', label: `${I.cog} 修改配置` });
+    options.push({ value: 'quit', label: `${I.cross} 退出` });
 
     const choice = await select({ message: '请选择操作', options });
     if (isCancel(choice) || choice === 'quit') break;
@@ -406,7 +411,7 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
     }
   }
 
-  outro('👋 再见');
+  outro(`${I.bye} 再见`);
   return config;
 }
 
