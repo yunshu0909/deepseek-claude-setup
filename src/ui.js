@@ -2,7 +2,7 @@
  * 交互式配置面板
  *
  * 负责：
- * - 引导用户配置 DeepSeek 模型、API Key 与思考模式
+ * - 引导用户配置 provider、模型、API Key 与思考模式
  * - 接入/关闭 Claude Code 与 Codex 的本地代理配置
  * - 启动时同步代理文件包与旧版 Codex 配置
  *
@@ -49,6 +49,10 @@ function providerName(config) {
 
 function providerSupportsThinking(config) {
   return activeProvider(config)?.capabilities?.thinking !== false;
+}
+
+function providerSupportsThinkingEffort(config) {
+  return activeProvider(config)?.capabilities?.thinkingEffort !== false;
 }
 
 /**
@@ -163,7 +167,7 @@ async function stepEffort(existing) {
 // 第五步：确认配置
 async function stepConfirm(cfg) {
   const thinkingText = providerSupportsThinking(cfg)
-    ? (cfg.thinking === 'disabled' ? '关闭' : `开启 (${cfg.effort})`)
+    ? (cfg.thinking === 'disabled' ? '关闭' : (providerSupportsThinkingEffort(cfg) ? `开启 (${cfg.effort})` : '开启'))
     : '不支持';
   const keyText = cfg.apiKey ? `${cfg.apiKey.slice(0, 7)}****` : '未配置';
   return confirm({
@@ -195,7 +199,7 @@ async function configWizard(existing) {
     thinking = await stepThinking(normalized?.thinking || 'enabled');
     if (thinking === null) { outro('已取消'); return null; }
 
-    if (thinking === 'enabled') {
+    if (thinking === 'enabled' && providerSupportsThinkingEffort({ activeProvider: providerId })) {
       effort = await stepEffort(normalized?.effort);
       if (effort === null) { outro('已取消'); return null; }
     }
@@ -402,7 +406,7 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
     const codexPatched = codexPatcher?.isPatched?.() || false;
     const anyEnabled = claudePatched || codexPatched;
     const thinkingText = thinkingSupported
-      ? (config.thinking === 'disabled' ? '关闭' : `开启 (${config.effort})`)
+      ? (config.thinking === 'disabled' ? '关闭' : (providerSupportsThinkingEffort(config) ? `开启 (${config.effort})` : '开启'))
       : '不支持';
 
     // 异常：有接入开启但代理没在跑（手动 kill 了代理或 LaunchAgent 没拉起来）
@@ -483,4 +487,4 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
   return config;
 }
 
-module.exports = { configWizard, mainPanel, supportsEmoji, buildProviderConfig, providerName, providerSupportsThinking };
+module.exports = { configWizard, mainPanel, supportsEmoji, buildProviderConfig, providerName, providerSupportsThinking, providerSupportsThinkingEffort };

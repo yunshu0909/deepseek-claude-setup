@@ -52,8 +52,20 @@ function activeProviderDefinition() {
   return providerRegistry.getProvider(CONFIG.activeProvider) || providerRegistry.getProvider('deepseek');
 }
 
+function activeCapabilities() {
+  return activeProviderDefinition()?.capabilities || {};
+}
+
 function providerSupportsThinking() {
-  return activeProviderDefinition()?.capabilities?.thinking !== false;
+  return activeCapabilities().thinking !== false;
+}
+
+function providerSupportsThinkingEffort() {
+  return activeCapabilities().thinkingEffort !== false;
+}
+
+function providerSupportsAnthropicThinking() {
+  return activeCapabilities().anthropicThinking !== false;
 }
 
 function endpointFromUrl(rawUrl) {
@@ -107,7 +119,7 @@ function healthBody() {
     provider: CONFIG.activeProvider || 'deepseek',
     model: CONFIG.model || 'deepseek-v4-pro',
     thinking,
-    effort: thinking === 'enabled' ? normalizeEffort(CONFIG.effort || 'max') : null,
+    effort: thinking === 'enabled' && providerSupportsThinkingEffort() ? normalizeEffort(CONFIG.effort || 'max') : null,
   });
 }
 
@@ -490,36 +502,48 @@ function streamChatToResponses(res, chatPayload, streamMode) {
 }
 
 /**
+ * 构造 provider-specific Chat Completions 扩展参数
+ * @param {object[]} messages - 已翻译的 Chat messages
+ * @param {object[]|undefined} tools - 已翻译的 Chat tools
+ * @param {string} thinking - enabled | disabled | unsupported
+ * @returns {object} 需要合并到 Chat Completions 请求体的扩展字段
+ */
+function chatProviderOptions(messages, tools, thinking) {
+  const caps = activeCapabilities();
+  const options = {};
+  if (caps.chatStreamOptions !== false) options.stream_options = { include_usage: true };
+  if (thinking !== 'unsupported') {
+    options.thinking = { type: thinking };
+    if (thinking === 'enabled' && caps.preservedThinking === 'clear_thinking' && messages.some(m => m.reasoning_content)) {
+      options.thinking.clear_thinking = false;
+    }
+  }
+  if (thinking === 'enabled' && providerSupportsThinkingEffort()) {
+    options.reasoning_effort = normalizeEffort(CONFIG.effort || 'max');
+  }
+  if (tools && caps.toolStreamParam) options[caps.toolStreamParam] = true;
+  return options;
+}
+
+/**
  * 处理 Codex Responses API 请求
- *
- * 按 DeepSeek 官方文档：
- * - 思考模式开关：`thinking: {type: enabled/disabled}`，OpenAI 和 Anthropic 路径都支持
- * - 思考强度（仅 enabled 时有效）：Chat Completions 路径用 `reasoning_effort`（high/max）；
- *   Anthropic 路径用 `output_config.effort`
- * - thinking=disabled 时 DeepSeek 真的不会输出 reasoning_content，代理无需在客户端侧拦截
  */
 function handleResponses(req, res, payload) {
-  const thinkingSupported = providerSupportsThinking();
-  const thinking = thinkingSupported ? normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
+  const thinking = providerSupportsThinking() ? normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
+  const messages = responsesInputToMessages(payload);
+  const tools = responsesToolsToChatTools(payload.tools);
   const body = {
     model: CONFIG.model || payload.model || 'deepseek-v4-pro',
-    messages: responsesInputToMessages(payload),
+    messages,
     stream: true,
-    stream_options: { include_usage: true },
   };
-  if (thinkingSupported) {
-    body.thinking = { type: thinking };
-  }
-  if (thinking === 'enabled') {
-    body.reasoning_effort = normalizeEffort(CONFIG.effort || 'max');
-  }
 
-  const tools = responsesToolsToChatTools(payload.tools);
   if (tools) {
     body.tools = tools;
     body.tool_choice = 'auto';
     log(`RESPONSES_TOOLS count=${tools.length} names=[${tools.map(t => t.function.name).join(',')}]`);
   }
+  Object.assign(body, chatProviderOptions(messages, tools, thinking));
 
   const streamMode = payload.stream !== false ? 'stream' : 'json';
   const inputTypes = (payload.input || []).map(it => it.type + (it.role ? ':' + it.role : '')).join(',');
@@ -600,15 +624,15 @@ const server = http.createServer((req, res) => {
 
     // Anthropic Messages 路径透传（Claude Code 走这里）
     const incomingModel = payload.model || '?';
-    const thinkingSupported = providerSupportsThinking();
-    const thinking = thinkingSupported ? normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
+    const thinking = providerSupportsThinking() ? normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
+    const anthropicThinking = thinking !== 'unsupported' && providerSupportsAnthropicThinking();
     payload.model = CONFIG.model || payload.model || 'deepseek-v4-pro';
-    if (thinkingSupported) {
+    if (anthropicThinking) {
       payload.thinking = { ...(payload.thinking || {}), type: thinking };
     } else {
       delete payload.thinking;
     }
-    if (thinking === 'enabled') {
+    if (thinking === 'enabled' && anthropicThinking && providerSupportsThinkingEffort()) {
       payload.output_config = { ...(payload.output_config || {}), effort: normalizeEffort(CONFIG.effort || 'max') };
     } else {
       delete payload.output_config;
@@ -752,5 +776,6 @@ server.on('error', err => {
 
 server.listen(PORT, '127.0.0.1', () => {
   const thinking = providerSupportsThinking() ? normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
-  log(`代理启动 localhost:${PORT} provider=${CONFIG.activeProvider || 'deepseek'} model=${CONFIG.model || 'deepseek-v4-pro'} thinking=${thinking} effort=${thinking === 'enabled' ? normalizeEffort(CONFIG.effort || 'max') : 'off'}`);
+  const effort = thinking === 'enabled' && providerSupportsThinkingEffort() ? normalizeEffort(CONFIG.effort || 'max') : 'off';
+  log(`代理启动 localhost:${PORT} provider=${CONFIG.activeProvider || 'deepseek'} model=${CONFIG.model || 'deepseek-v4-pro'} thinking=${thinking} effort=${effort}`);
 });

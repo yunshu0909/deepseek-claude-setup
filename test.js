@@ -237,14 +237,14 @@ async function run() {
       zai: { apiKey: 'zai-test-key', model: 'glm-5.1' },
     },
   });
-  check('normalizes Z.AI provider defaults and active compatibility fields', () => {
+  check('normalizes Zhipu provider defaults and active compatibility fields', () => {
     const normalized = configStore.readNormalized();
     assert.strictEqual(normalized.activeProvider, 'zai');
     assert.strictEqual(normalized.apiKey, 'zai-test-key');
     assert.strictEqual(normalized.model, 'glm-5.1');
-    assert.strictEqual(normalized.providers.zai.baseUrl, 'https://api.z.ai/api/paas/v4');
+    assert.strictEqual(normalized.providers.zai.baseUrl, 'https://open.bigmodel.cn/api/paas/v4');
     assert.strictEqual(normalized.providers.zai.chatPath, '/chat/completions');
-    assert.strictEqual(normalized.providers.zai.anthropicBaseUrl, 'https://api.z.ai/api/anthropic');
+    assert.strictEqual(normalized.providers.zai.anthropicBaseUrl, 'https://open.bigmodel.cn/api/anthropic');
   });
   configStore.write(cfg);
 
@@ -258,14 +258,17 @@ async function run() {
     assert.strictEqual(deepseek.capabilities.reasoningStream, 'native');
     assert.strictEqual(deepseek.normalizeConfig({}).model, 'deepseek-v4-pro');
   });
-  check('registers Z.AI provider capabilities and defaults', () => {
+  check('registers Zhipu provider capabilities and defaults', () => {
     const zai = providerRegistry.getProvider('zai');
     assert.ok(zai);
-    assert.strictEqual(zai.displayName, 'Z.AI / 智谱');
+    assert.strictEqual(zai.displayName, '智谱 BigModel');
     assert.strictEqual(zai.capabilities.claudeCode, 'anthropic_forward');
     assert.strictEqual(zai.capabilities.codex, 'chat_bridge');
+    assert.strictEqual(zai.capabilities.thinking, true);
+    assert.strictEqual(zai.capabilities.thinkingEffort, false);
+    assert.strictEqual(zai.capabilities.toolStreamParam, 'tool_stream');
     assert.strictEqual(zai.normalizeConfig({}).model, 'glm-5.1');
-    assert.strictEqual(zai.normalizeConfig({}).baseUrl, 'https://api.z.ai/api/paas/v4');
+    assert.strictEqual(zai.normalizeConfig({}).baseUrl, 'https://open.bigmodel.cn/api/paas/v4');
   });
   check('returns null for unknown provider ids', () => {
     assert.strictEqual(providerRegistry.getProvider('unknown-provider'), null);
@@ -306,7 +309,8 @@ async function run() {
   });
   check('providerSupportsThinking follows active provider capabilities', () => {
     assert.strictEqual(ui.providerSupportsThinking({ activeProvider: 'deepseek' }), true);
-    assert.strictEqual(ui.providerSupportsThinking({ activeProvider: 'zai' }), false);
+    assert.strictEqual(ui.providerSupportsThinking({ activeProvider: 'zai' }), true);
+    assert.strictEqual(ui.providerSupportsThinkingEffort({ activeProvider: 'zai' }), false);
   });
 
   console.log('\n-- settings-patcher --');

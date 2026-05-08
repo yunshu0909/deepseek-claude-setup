@@ -91,12 +91,19 @@ async function run() {
   }
 
   const model = process.env.PROVIDER_SMOKE_MODEL || provider.models[0]?.id;
-  const providerConfig = provider.normalizeConfig({ apiKey, model });
+  const providerConfig = provider.normalizeConfig({
+    apiKey,
+    model,
+    baseUrl: process.env.PROVIDER_SMOKE_BASE_URL,
+    anthropicBaseUrl: process.env.PROVIDER_SMOKE_ANTHROPIC_BASE_URL,
+  });
+  const thinking = process.env.PROVIDER_SMOKE_THINKING
+    || (provider.capabilities?.thinking === false ? 'disabled' : 'enabled');
   fs.mkdirSync(configDir, { recursive: true });
   proxyBundle.deployProxyBundle(configDir);
   fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({
     activeProvider: providerId,
-    thinking: provider.capabilities?.thinking === false ? 'disabled' : 'enabled',
+    thinking,
     effort: 'high',
     providers: {
       [providerId]: providerConfig,

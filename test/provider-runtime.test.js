@@ -135,7 +135,7 @@ async function run() {
     check('health exposes active provider and model from provider config', () => {
       assert.strictEqual(health.provider, 'zai');
       assert.strictEqual(health.model, 'glm-5.1');
-      assert.strictEqual(health.thinking, 'unsupported');
+      assert.strictEqual(health.thinking, 'enabled');
       assert.strictEqual(health.effort, null);
     });
 
@@ -154,7 +154,14 @@ async function run() {
 
     const responses = await requestJson('/v1/responses', {
       model: 'ignored',
-      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'list files' }] },
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'Need a tool.' }] },
+        { type: 'function_call', call_id: 'call_zai_runtime', name: 'exec_command', arguments: '{"cmd":"ls"}' },
+        { type: 'function_call_output', call_id: 'call_zai_runtime', output: 'README.md' },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'summarize' }] },
+      ],
+      tools: [{ type: 'function', name: 'exec_command', description: 'Run command', parameters: { type: 'object', properties: {} } }],
       stream: false,
     });
     check('Responses path uses provider OpenAI Chat endpoint', () => {
@@ -162,8 +169,10 @@ async function run() {
       assert.strictEqual(upstream.calls[1].url, '/openai/chat/custom');
       assert.strictEqual(upstream.calls[1].headers.authorization, 'Bearer zai-provider-runtime');
       assert.strictEqual(upstream.calls[1].body.model, 'glm-5.1');
-      assert.strictEqual(upstream.calls[1].body.thinking, undefined);
+      assert.deepStrictEqual(upstream.calls[1].body.thinking, { type: 'enabled', clear_thinking: false });
       assert.strictEqual(upstream.calls[1].body.reasoning_effort, undefined);
+      assert.strictEqual(upstream.calls[1].body.stream_options, undefined);
+      assert.strictEqual(upstream.calls[1].body.tool_stream, true);
       assert.match(responses.body, /provider chat ok/);
     });
   } finally {
