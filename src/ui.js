@@ -10,6 +10,7 @@
  */
 const { intro, outro, text, select, confirm, spinner, note, cancel, isCancel } = require('@clack/prompts');
 const configStore = require('./config-store');
+const providerRegistry = require('./providers');
 const proxyBundle = require('./proxy-bundle');
 const verifier = require('./verifier');
 
@@ -38,21 +39,76 @@ const I_EMOJI = { tool: '🔧', robot: '🤖', cmd: '⌘',   brain: '🧠', dot:
 const I_ASCII = { tool: '[ ]', robot: '[C]', cmd: '[X]', brain: '[T]', dot: '*', circle: '○', warn: '[!]', cog: '[*]', cross: '[x]', bye: '[bye]', wrench: '[F]' };
 const I = supportsEmoji() ? I_EMOJI : I_ASCII;
 
-// 第一步：输入 API Key（带验证）
-async function stepApiKey(existing) {
+function activeProvider(config) {
+  return providerRegistry.getProvider(config?.activeProvider || 'deepseek') || providerRegistry.getProvider('deepseek');
+}
+
+function providerName(config) {
+  return activeProvider(config)?.displayName || config?.activeProvider || 'DeepSeek';
+}
+
+/**
+ * 基于向导输入构造 Provider Gateway 配置
+ * @param {object|null} existing - 现有配置，兼容旧版 DeepSeek-only 结构
+ * @param {string} providerId - 当前选中的 provider id
+ * @param {{apiKey: string, model: string, thinking: string, effort: string}} fields - 向导输入字段
+ * @returns {object} 归一化后的 Provider Gateway 配置
+ */
+function buildProviderConfig(existing, providerId, fields) {
+  const normalized = configStore.normalizeConfig(existing) || {
+    activeProvider: providerId,
+    thinking: 'enabled',
+    effort: 'max',
+    providers: {},
+  };
+  const previousProviders = normalized.providers || {};
+  const previousProviderConfig = previousProviders[providerId] || {};
+  return configStore.normalizeConfig({
+    activeProvider: providerId,
+    thinking: fields.thinking,
+    effort: fields.effort,
+    providers: {
+      ...previousProviders,
+      [providerId]: {
+        ...previousProviderConfig,
+        apiKey: fields.apiKey,
+        model: fields.model,
+      },
+    },
+  });
+}
+
+// 第一步：选择 provider。后续继续接入 provider 时只需扩展 registry。
+async function stepProvider(existing) {
+  const providers = providerRegistry.listProviders();
+  const providerId = await select({
+    message: '选择 Provider',
+    options: providers.map(provider => ({
+      value: provider.id,
+      label: provider.displayName,
+      hint: provider.capabilities?.claudeCode === 'anthropic_forward' ? 'Claude Code / Codex' : undefined,
+    })),
+    initialValue: existing || 'deepseek',
+  });
+  return isCancel(providerId) ? null : providerId;
+}
+
+// 第二步：输入 API Key（DeepSeek 先走真实校验；后续 provider 可扩展自己的 verifier）
+async function stepApiKey(provider, existing) {
   while (true) {
     const key = await text({
-      message: '请输入 DeepSeek API Key',
-      placeholder: 'sk-xxxxxxxxxxxxxxxx',
+      message: `请输入 ${provider.displayName} API Key`,
+      placeholder: provider.id === 'deepseek' ? 'sk-xxxxxxxxxxxxxxxx' : '请输入 API Key',
       initialValue: existing || '',
       validate(value) {
         if (!value.trim()) return '请输入 API Key';
-        if (!value.startsWith('sk-')) return 'API Key 应以 sk- 开头';
+        if (provider.id === 'deepseek' && !value.startsWith('sk-')) return 'DeepSeek API Key 应以 sk- 开头';
         return;
       },
     });
     if (isCancel(key)) return null;
 
+    if (provider.id !== 'deepseek') return key;
     const s = spinner();
     s.start('验证 API Key...');
     const ok = await verifier.checkApiKey(key);
@@ -61,20 +117,21 @@ async function stepApiKey(existing) {
   }
 }
 
-// 第二步：选择模型
-async function stepModel(existing) {
+// 第三步：选择模型
+async function stepModel(provider, existing) {
   const m = await select({
     message: '选择模型',
-    options: [
-      { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro（推荐 — 最强推理）', hint: 'Pro' },
-      { value: 'deepseek-v4-flash', label: 'deepseek-v4-flash（快速响应）', hint: 'Flash' },
-    ],
-    initialValue: existing || 'deepseek-v4-pro',
+    options: provider.models.map(model => ({
+      value: model.id,
+      label: model.label || model.id,
+      hint: model.hint,
+    })),
+    initialValue: existing || provider.models[0]?.id,
   });
   return isCancel(m) ? null : m;
 }
 
-// 第三步：选择思考等级
+// 第四步：选择思考等级
 async function stepThinking(existing) {
   const t = await select({
     message: '选择思考模式',
@@ -99,35 +156,43 @@ async function stepEffort(existing) {
   return isCancel(e) ? null : e;
 }
 
-// 第四步：确认配置
+// 第五步：确认配置
 async function stepConfirm(cfg) {
   const thinkingText = cfg.thinking === 'disabled' ? '关闭' : `开启 (${cfg.effort})`;
+  const keyText = cfg.apiKey ? `${cfg.apiKey.slice(0, 7)}****` : '未配置';
   return confirm({
-    message: `确认配置？\n  模型: ${cfg.model}  |  思考模式: ${thinkingText}  |  API Key: ${cfg.apiKey.slice(0,7)}****`,
+    message: `确认配置？\n  Provider: ${providerName(cfg)}  |  模型: ${cfg.model}\n  思考模式: ${thinkingText}  |  API Key: ${keyText}`,
     initialValue: true,
   });
 }
 
 // 完整配置向导
 async function configWizard(existing) {
-  intro(`${I.tool} DeepSeek × Claude Code — 首次配置`);
+  const normalized = configStore.normalizeConfig(existing);
+  intro(`${I.tool} Provider Gateway × Claude Code / Codex`);
 
-  const apiKey = await stepApiKey(existing?.apiKey);
+  const providerId = await stepProvider(normalized?.activeProvider || 'deepseek');
+  if (providerId === null) { outro('已取消'); return null; }
+
+  const provider = providerRegistry.getProvider(providerId);
+  const providerConfig = normalized?.providers?.[providerId] || {};
+
+  const apiKey = await stepApiKey(provider, providerConfig.apiKey || normalized?.apiKey);
   if (apiKey === null) { outro('已取消'); return null; }
 
-  const model = await stepModel(existing?.model);
+  const model = await stepModel(provider, providerConfig.model || normalized?.model);
   if (model === null) { outro('已取消'); return null; }
 
-  const thinking = await stepThinking(existing?.thinking || 'enabled');
+  const thinking = await stepThinking(normalized?.thinking || 'enabled');
   if (thinking === null) { outro('已取消'); return null; }
 
-  let effort = existing?.effort || 'max';
+  let effort = normalized?.effort || 'max';
   if (thinking === 'enabled') {
-    effort = await stepEffort(existing?.effort);
+    effort = await stepEffort(normalized?.effort);
     if (effort === null) { outro('已取消'); return null; }
   }
 
-  const cfg = configStore.normalizeConfig({ apiKey, model, thinking, effort });
+  const cfg = buildProviderConfig(normalized, providerId, { apiKey, model, thinking, effort });
 
   if (!await stepConfirm(cfg)) {
     outro('已取消');
@@ -236,7 +301,7 @@ async function enableCodex(config, proxyManager, autostart, codexPatcher) {
     await ensureProxyRunning(config, proxyManager, autostart);
     s.message('✅ 代理已就绪');
     codexPatcher.patch(config);
-    s.stop('✅ Codex 已接入，直接执行 codex 即可使用 DeepSeek\n   💡 临时使用 OpenAI：codex -p openai');
+    s.stop(`✅ Codex 已接入，直接执行 codex 即可使用 ${providerName(config)}\n   💡 临时使用 OpenAI：codex -p openai`);
     return true;
   } catch (err) {
     s.stop(`❌ Codex 接入失败: ${err.message}`);
@@ -320,6 +385,7 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
   await syncProxyOnStartup(config, proxyManager, autostart);
   await syncCodexPatchOnStartup(config, codexPatcher);
   while (true) {
+    config = configStore.normalizeConfig(config);
     config.thinking = config.thinking || 'enabled';
     const running = await proxyManager.isRunning();
     const claudePatched = settingsPatcher.isPatched();
@@ -330,14 +396,14 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
     // 异常：有接入开启但代理没在跑（手动 kill 了代理或 LaunchAgent 没拉起来）
     const anomaly = anyEnabled && !running;
 
-    intro(`${I.tool} DeepSeek × Claude Code / Codex`);
+    intro(`${I.tool} Provider Gateway × Claude Code / Codex`);
     const claudeLine = `Claude Code: ${claudePatched ? `${I.dot} 已接入` : `${I.circle} 未接入`}`;
     const codexLine = `Codex:       ${codexPatched ? `${I.dot} 已接入 (直接 codex 即可使用)` : `${I.circle} 未接入`}`;
     const proxyLine = anomaly
       ? `代理:        ${I.warn} 接入已开但代理未运行`
       : (running ? `代理:        ${I.dot} 127.0.0.1:17861` : `代理:        ${I.circle} 未运行`);
     note(
-      `${claudeLine}\n${codexLine}\n${proxyLine}\n模型: ${config.model}  |  思考模式: ${thinkingText}`
+      `${claudeLine}\n${codexLine}\n${proxyLine}\nProvider: ${providerName(config)}  |  模型: ${config.model}  |  思考模式: ${thinkingText}`
     );
 
     const options = [];
@@ -403,4 +469,4 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
   return config;
 }
 
-module.exports = { configWizard, mainPanel, supportsEmoji };
+module.exports = { configWizard, mainPanel, supportsEmoji, buildProviderConfig, providerName };

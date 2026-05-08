@@ -114,13 +114,13 @@ async function run() {
 
   const upstream = await makeProviderUpstream();
   fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({
-    activeProvider: 'deepseek',
+    activeProvider: 'zai',
     thinking: 'enabled',
     effort: 'high',
     providers: {
-      deepseek: {
-        apiKey: 'sk-provider-runtime',
-        model: 'deepseek-v4-pro',
+      zai: {
+        apiKey: 'zai-provider-runtime',
+        model: 'glm-5.1',
         baseUrl: `http://127.0.0.1:${upstream.port}/openai`,
         chatPath: '/chat/custom',
         anthropicBaseUrl: `http://127.0.0.1:${upstream.port}/custom-anthropic`,
@@ -133,8 +133,8 @@ async function run() {
   try {
     const health = await proxyManager.getHealth();
     check('health exposes active provider and model from provider config', () => {
-      assert.strictEqual(health.provider, 'deepseek');
-      assert.strictEqual(health.model, 'deepseek-v4-pro');
+      assert.strictEqual(health.provider, 'zai');
+      assert.strictEqual(health.model, 'glm-5.1');
       assert.strictEqual(health.effort, 'high');
     });
 
@@ -146,7 +146,7 @@ async function run() {
     check('Anthropic path uses provider anthropicBaseUrl', () => {
       assert.strictEqual(anthropic.statusCode, 200);
       assert.strictEqual(upstream.calls[0].url, '/custom-anthropic/v1/messages?beta=true');
-      assert.strictEqual(upstream.calls[0].headers['x-api-key'], 'sk-provider-runtime');
+      assert.strictEqual(upstream.calls[0].headers['x-api-key'], 'zai-provider-runtime');
     });
 
     const responses = await requestJson('/v1/responses', {
@@ -157,8 +157,8 @@ async function run() {
     check('Responses path uses provider OpenAI Chat endpoint', () => {
       assert.strictEqual(responses.statusCode, 200);
       assert.strictEqual(upstream.calls[1].url, '/openai/chat/custom');
-      assert.strictEqual(upstream.calls[1].headers.authorization, 'Bearer sk-provider-runtime');
-      assert.strictEqual(upstream.calls[1].body.model, 'deepseek-v4-pro');
+      assert.strictEqual(upstream.calls[1].headers.authorization, 'Bearer zai-provider-runtime');
+      assert.strictEqual(upstream.calls[1].body.model, 'glm-5.1');
       assert.match(responses.body, /provider chat ok/);
     });
   } finally {

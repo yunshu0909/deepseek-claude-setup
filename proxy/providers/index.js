@@ -10,9 +10,11 @@
  */
 
 const deepseek = require('./deepseek');
+const zai = require('./zai');
 
 const PROVIDERS = {
   [deepseek.id]: deepseek,
+  [zai.id]: zai,
 };
 
 /**

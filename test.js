@@ -23,6 +23,7 @@ const proxyBundle = require('./src/proxy-bundle');
 const settingsPatcher = require('./src/settings-patcher');
 const codexPatcher = require('./src/codex-patcher');
 const proxyManager = require('./src/proxy-manager');
+const ui = require('./src/ui');
 
 let passed = 0;
 let failed = 0;
@@ -228,6 +229,23 @@ async function run() {
     assert.strictEqual(normalized.apiKey, 'sk-new');
     assert.strictEqual(normalized.model, 'deepseek-v4-pro');
   });
+  configStore.write({
+    activeProvider: 'zai',
+    thinking: 'enabled',
+    effort: 'max',
+    providers: {
+      zai: { apiKey: 'zai-test-key', model: 'glm-5.1' },
+    },
+  });
+  check('normalizes Z.AI provider defaults and active compatibility fields', () => {
+    const normalized = configStore.readNormalized();
+    assert.strictEqual(normalized.activeProvider, 'zai');
+    assert.strictEqual(normalized.apiKey, 'zai-test-key');
+    assert.strictEqual(normalized.model, 'glm-5.1');
+    assert.strictEqual(normalized.providers.zai.baseUrl, 'https://api.z.ai/api/paas/v4');
+    assert.strictEqual(normalized.providers.zai.chatPath, '/chat/completions');
+    assert.strictEqual(normalized.providers.zai.anthropicBaseUrl, 'https://api.z.ai/api/anthropic');
+  });
   configStore.write(cfg);
 
   console.log('\n-- provider-registry --');
@@ -240,8 +258,51 @@ async function run() {
     assert.strictEqual(deepseek.capabilities.reasoningStream, 'native');
     assert.strictEqual(deepseek.normalizeConfig({}).model, 'deepseek-v4-pro');
   });
+  check('registers Z.AI provider capabilities and defaults', () => {
+    const zai = providerRegistry.getProvider('zai');
+    assert.ok(zai);
+    assert.strictEqual(zai.displayName, 'Z.AI / 智谱');
+    assert.strictEqual(zai.capabilities.claudeCode, 'anthropic_forward');
+    assert.strictEqual(zai.capabilities.codex, 'chat_bridge');
+    assert.strictEqual(zai.normalizeConfig({}).model, 'glm-5.1');
+    assert.strictEqual(zai.normalizeConfig({}).baseUrl, 'https://api.z.ai/api/paas/v4');
+  });
   check('returns null for unknown provider ids', () => {
     assert.strictEqual(providerRegistry.getProvider('unknown-provider'), null);
+  });
+
+  console.log('\n-- provider-aware ui config --');
+  check('builds provider config and preserves endpoint fields', () => {
+    const built = ui.buildProviderConfig({
+      activeProvider: 'deepseek',
+      thinking: 'disabled',
+      effort: 'high',
+      providers: {
+        deepseek: {
+          apiKey: 'sk-old',
+          model: 'deepseek-v4-flash',
+          baseUrl: 'http://127.0.0.1:3001/openai',
+          chatPath: '/custom/chat',
+          anthropicBaseUrl: 'http://127.0.0.1:3001/anthropic',
+        },
+      },
+    }, 'deepseek', {
+      apiKey: 'sk-updated',
+      model: 'deepseek-v4-pro',
+      thinking: 'enabled',
+      effort: 'max',
+    });
+    assert.strictEqual(built.activeProvider, 'deepseek');
+    assert.strictEqual(built.apiKey, 'sk-updated');
+    assert.strictEqual(built.model, 'deepseek-v4-pro');
+    assert.strictEqual(built.thinking, 'enabled');
+    assert.strictEqual(built.effort, 'max');
+    assert.strictEqual(built.providers.deepseek.baseUrl, 'http://127.0.0.1:3001/openai');
+    assert.strictEqual(built.providers.deepseek.chatPath, '/custom/chat');
+    assert.strictEqual(built.providers.deepseek.anthropicBaseUrl, 'http://127.0.0.1:3001/anthropic');
+  });
+  check('providerName uses registered provider display name', () => {
+    assert.strictEqual(ui.providerName({ activeProvider: 'deepseek' }), 'DeepSeek');
   });
 
   console.log('\n-- settings-patcher --');
