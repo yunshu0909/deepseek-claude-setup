@@ -1,9 +1,9 @@
 /**
- * DeepSeek 代理服务
+ * Provider Gateway 代理服务
  *
  * 负责：
- * - Anthropic Messages 路径透传到 DeepSeek，并覆盖 model/thinking/output_config.effort
- * - Codex Responses API 翻译到 DeepSeek Chat Completions（含真流式状态机）
+ * - Anthropic Messages 路径透传到 active provider，并按 provider 能力注入参数
+ * - Codex Responses API 翻译到 active provider Chat Completions（含真流式状态机）
  * - 维持 LaunchAgent 拉起的常驻进程，提供 /__health 健康检查
  *
  * @module proxy/proxy
@@ -15,6 +15,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { responsesInputToMessages, responsesToolsToChatTools } = require('./codex-input');
+const providerRegistry = require('./providers');
 const runtimeConfig = require('./runtime-config');
 
 const CONFIG_DIR = process.env.DEEPSEEK_CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.deepseek-claude');
@@ -45,6 +46,14 @@ function generateCallId() {
 
 function activeProviderConfig() {
   return CONFIG.providers?.[CONFIG.activeProvider] || {};
+}
+
+function activeProviderDefinition() {
+  return providerRegistry.getProvider(CONFIG.activeProvider) || providerRegistry.getProvider('deepseek');
+}
+
+function providerSupportsThinking() {
+  return activeProviderDefinition()?.capabilities?.thinking !== false;
 }
 
 function endpointFromUrl(rawUrl) {
@@ -91,7 +100,7 @@ function anthropicTarget(requestUrl) {
 }
 
 function healthBody() {
-  const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
+  const thinking = providerSupportsThinking() ? normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
   return JSON.stringify({
     service: SERVICE_NAME,
     ok: true,
@@ -490,14 +499,17 @@ function streamChatToResponses(res, chatPayload, streamMode) {
  * - thinking=disabled 时 DeepSeek 真的不会输出 reasoning_content，代理无需在客户端侧拦截
  */
 function handleResponses(req, res, payload) {
-  const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
+  const thinkingSupported = providerSupportsThinking();
+  const thinking = thinkingSupported ? normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
   const body = {
     model: CONFIG.model || payload.model || 'deepseek-v4-pro',
     messages: responsesInputToMessages(payload),
     stream: true,
     stream_options: { include_usage: true },
-    thinking: { type: thinking },
   };
+  if (thinkingSupported) {
+    body.thinking = { type: thinking };
+  }
   if (thinking === 'enabled') {
     body.reasoning_effort = normalizeEffort(CONFIG.effort || 'max');
   }
@@ -588,9 +600,14 @@ const server = http.createServer((req, res) => {
 
     // Anthropic Messages 路径透传（Claude Code 走这里）
     const incomingModel = payload.model || '?';
-    const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
+    const thinkingSupported = providerSupportsThinking();
+    const thinking = thinkingSupported ? normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
     payload.model = CONFIG.model || payload.model || 'deepseek-v4-pro';
-    payload.thinking = { ...(payload.thinking || {}), type: thinking };
+    if (thinkingSupported) {
+      payload.thinking = { ...(payload.thinking || {}), type: thinking };
+    } else {
+      delete payload.thinking;
+    }
     if (thinking === 'enabled') {
       payload.output_config = { ...(payload.output_config || {}), effort: normalizeEffort(CONFIG.effort || 'max') };
     } else {
@@ -598,7 +615,7 @@ const server = http.createServer((req, res) => {
     }
 
     const bodyOut = JSON.stringify(payload);
-    log(`POST ${req.url} | model=${incomingModel}->${payload.model} | thinking=${payload.thinking.type} | effort=${payload.output_config?.effort || 'off'}`);
+    log(`POST ${req.url} | model=${incomingModel}->${payload.model} | thinking=${thinking} | effort=${payload.output_config?.effort || 'off'}`);
 
     const headers = {};
     for (const [key, value] of Object.entries(req.headers)) {
@@ -734,6 +751,6 @@ server.on('error', err => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
+  const thinking = providerSupportsThinking() ? normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
   log(`代理启动 localhost:${PORT} provider=${CONFIG.activeProvider || 'deepseek'} model=${CONFIG.model || 'deepseek-v4-pro'} thinking=${thinking} effort=${thinking === 'enabled' ? normalizeEffort(CONFIG.effort || 'max') : 'off'}`);
 });

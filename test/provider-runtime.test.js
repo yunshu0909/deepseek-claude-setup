@@ -135,7 +135,8 @@ async function run() {
     check('health exposes active provider and model from provider config', () => {
       assert.strictEqual(health.provider, 'zai');
       assert.strictEqual(health.model, 'glm-5.1');
-      assert.strictEqual(health.effort, 'high');
+      assert.strictEqual(health.thinking, 'unsupported');
+      assert.strictEqual(health.effort, null);
     });
 
     const anthropic = await requestJson('/v1/messages?beta=true', {
@@ -147,6 +148,8 @@ async function run() {
       assert.strictEqual(anthropic.statusCode, 200);
       assert.strictEqual(upstream.calls[0].url, '/custom-anthropic/v1/messages?beta=true');
       assert.strictEqual(upstream.calls[0].headers['x-api-key'], 'zai-provider-runtime');
+      assert.strictEqual(upstream.calls[0].body.thinking, undefined);
+      assert.strictEqual(upstream.calls[0].body.output_config, undefined);
     });
 
     const responses = await requestJson('/v1/responses', {
@@ -159,6 +162,8 @@ async function run() {
       assert.strictEqual(upstream.calls[1].url, '/openai/chat/custom');
       assert.strictEqual(upstream.calls[1].headers.authorization, 'Bearer zai-provider-runtime');
       assert.strictEqual(upstream.calls[1].body.model, 'glm-5.1');
+      assert.strictEqual(upstream.calls[1].body.thinking, undefined);
+      assert.strictEqual(upstream.calls[1].body.reasoning_effort, undefined);
       assert.match(responses.body, /provider chat ok/);
     });
   } finally {

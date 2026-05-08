@@ -47,6 +47,10 @@ function providerName(config) {
   return activeProvider(config)?.displayName || config?.activeProvider || 'DeepSeek';
 }
 
+function providerSupportsThinking(config) {
+  return activeProvider(config)?.capabilities?.thinking !== false;
+}
+
 /**
  * 基于向导输入构造 Provider Gateway 配置
  * @param {object|null} existing - 现有配置，兼容旧版 DeepSeek-only 结构
@@ -158,7 +162,9 @@ async function stepEffort(existing) {
 
 // 第五步：确认配置
 async function stepConfirm(cfg) {
-  const thinkingText = cfg.thinking === 'disabled' ? '关闭' : `开启 (${cfg.effort})`;
+  const thinkingText = providerSupportsThinking(cfg)
+    ? (cfg.thinking === 'disabled' ? '关闭' : `开启 (${cfg.effort})`)
+    : '不支持';
   const keyText = cfg.apiKey ? `${cfg.apiKey.slice(0, 7)}****` : '未配置';
   return confirm({
     message: `确认配置？\n  Provider: ${providerName(cfg)}  |  模型: ${cfg.model}\n  思考模式: ${thinkingText}  |  API Key: ${keyText}`,
@@ -183,13 +189,16 @@ async function configWizard(existing) {
   const model = await stepModel(provider, providerConfig.model || normalized?.model);
   if (model === null) { outro('已取消'); return null; }
 
-  const thinking = await stepThinking(normalized?.thinking || 'enabled');
-  if (thinking === null) { outro('已取消'); return null; }
-
+  let thinking = 'disabled';
   let effort = normalized?.effort || 'max';
-  if (thinking === 'enabled') {
-    effort = await stepEffort(normalized?.effort);
-    if (effort === null) { outro('已取消'); return null; }
+  if (provider.capabilities?.thinking !== false) {
+    thinking = await stepThinking(normalized?.thinking || 'enabled');
+    if (thinking === null) { outro('已取消'); return null; }
+
+    if (thinking === 'enabled') {
+      effort = await stepEffort(normalized?.effort);
+      if (effort === null) { outro('已取消'); return null; }
+    }
   }
 
   const cfg = buildProviderConfig(normalized, providerId, { apiKey, model, thinking, effort });
@@ -387,11 +396,14 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
   while (true) {
     config = configStore.normalizeConfig(config);
     config.thinking = config.thinking || 'enabled';
+    const thinkingSupported = providerSupportsThinking(config);
     const running = await proxyManager.isRunning();
     const claudePatched = settingsPatcher.isPatched();
     const codexPatched = codexPatcher?.isPatched?.() || false;
     const anyEnabled = claudePatched || codexPatched;
-    const thinkingText = config.thinking === 'disabled' ? '关闭' : `开启 (${config.effort})`;
+    const thinkingText = thinkingSupported
+      ? (config.thinking === 'disabled' ? '关闭' : `开启 (${config.effort})`)
+      : '不支持';
 
     // 异常：有接入开启但代理没在跑（手动 kill 了代理或 LaunchAgent 没拉起来）
     const anomaly = anyEnabled && !running;
@@ -420,10 +432,12 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
         label: codexPatched ? `${I.cmd} 关闭 Codex 接入` : `${I.cmd} 开启 Codex 接入`,
       });
     }
-    options.push({
-      value: 'toggle-thinking',
-      label: config.thinking === 'disabled' ? `${I.brain} 开启思考模式` : `${I.brain} 关闭思考模式`,
-    });
+    if (thinkingSupported) {
+      options.push({
+        value: 'toggle-thinking',
+        label: config.thinking === 'disabled' ? `${I.brain} 开启思考模式` : `${I.brain} 关闭思考模式`,
+      });
+    }
     options.push({ value: 'reconfig', label: `${I.cog} 修改配置` });
     options.push({ value: 'quit', label: `${I.cross} 退出` });
 
@@ -469,4 +483,4 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
   return config;
 }
 
-module.exports = { configWizard, mainPanel, supportsEmoji, buildProviderConfig, providerName };
+module.exports = { configWizard, mainPanel, supportsEmoji, buildProviderConfig, providerName, providerSupportsThinking };

@@ -304,6 +304,10 @@ async function run() {
   check('providerName uses registered provider display name', () => {
     assert.strictEqual(ui.providerName({ activeProvider: 'deepseek' }), 'DeepSeek');
   });
+  check('providerSupportsThinking follows active provider capabilities', () => {
+    assert.strictEqual(ui.providerSupportsThinking({ activeProvider: 'deepseek' }), true);
+    assert.strictEqual(ui.providerSupportsThinking({ activeProvider: 'zai' }), false);
+  });
 
   console.log('\n-- settings-patcher --');
   settingsPatcher.patch(cfg);
