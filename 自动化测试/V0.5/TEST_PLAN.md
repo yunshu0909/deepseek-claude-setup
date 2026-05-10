@@ -191,23 +191,24 @@ npm run e2e:clients
 
 目的：覆盖最容易出 bug 的多轮工具调用、reasoning_content 回传、上下文累积。
 
-标准 prompt：
+标准 prompt（跨平台：用 Node 内置模块跑测试，不依赖 bash/curl）：
 
 ```text
 写一个 Node.js HTTP 文件管理服务，只使用 Node 内置模块。
 1. 创建 server.js，支持 GET /、GET /files、GET /files/:name、POST /files/:name、DELETE /files/:name。
 2. 文件存到 ./data。
-3. 创建 test.sh，用 curl 跑 7 个断言，最后输出 ALL 7 TESTS PASS。
-4. 实际运行 bash test.sh，修到测试通过。
+3. 创建 test.js（不是 test.sh），只用 Node 内置 http 和 assert 模块跑 7 个断言，最后用 console.log 输出一行：ALL 7 TESTS PASS。
+4. 实际运行 `node test.js`，修到测试通过。
 ```
 
 必须覆盖：
 
 - Codex 创建文件。
-- Codex 实际运行测试脚本。
+- Codex 实际运行 `node test.js`。
 - Codex 自己修复测试失败。
 - 代理日志连续 `RESPONSES_DONE`。
 - 本次长链路 0 `RESPONSES_FAILED`。
+- runner 在 Codex 退出后**再次执行** `node test.js` 二次验证（防止模型只在 stdout echo 字符串骗过去）。
 
 通过标准：
 
@@ -328,3 +329,35 @@ v0.5 发版前必须全部满足：
 - provider 能力变化同步 `docs/provider-matrix.md`。
 - PRD 状态变化同步 `docs/prd/PRD-005-v0.5.md`。
 - 若新增 provider，把本文件的 provider 专项规则复制一份扩展，不要临时口头约定。
+
+## 9. L4 / L5 标准入口（PRD-006）
+
+L4 真实客户端 CLI 测试 + L5 长链路统一通过 `npm run e2e:clients` 进入。具体见 [PRD-006](../../../docs/prd/PRD-006-v0.5-client-e2e.md)。
+
+```bash
+# L4：DeepSeek 默认三项（claude-text + claude-tool + codex-tool）
+DEEPSEEK_API_KEY=... CLIENT_E2E_PROVIDER=deepseek CLIENT_E2E_MODEL=deepseek-v4-pro npm run e2e:clients
+
+# L4 + L5：追加 codex-long
+DEEPSEEK_API_KEY=... CLIENT_E2E_PROVIDER=deepseek CLIENT_E2E_MODEL=deepseek-v4-pro CLIENT_E2E_LONG=1 npm run e2e:clients
+
+# 智谱矩阵（同上替换 provider/key 即可）
+ZHIPU_API_KEY=... CLIENT_E2E_PROVIDER=zai CLIENT_E2E_MODEL=glm-5.1 CLIENT_E2E_LONG=1 npm run e2e:clients
+```
+
+每次跑测自动生成：
+- `自动化测试/V0.5/CLIENT_E2E_REPORT_LATEST.md`（人读）
+- `自动化测试/V0.5/CLIENT_E2E_REPORT_LATEST.json`（机读）
+
+CLIENT_E2E_REPORT 环境变量可指定额外的存档路径（不替换默认 latest）。
+
+## 10. E2E 测试纪律
+
+跑 `npm run e2e:clients` 期间：
+
+- **不要在另一个窗口/IDE 里同时使用 Claude Code 或 Codex**。否则你日常用客户端会动 `~/.claude.json` / `~/.codex/config.toml`，被 runner 的"用户配置 sha256 比对"误判为污染。
+  - runner 已经实现按 target 归因（codex-only 测试不阻断 Claude 改动），但保持纪律才能拿到 100% 干净的报告。
+- 不要中途 `Ctrl+C` 长链路。Codex 长链路会自己跑测试 + 自修复，最长可能 10+ 分钟，是正常的。
+- 如果你需要**保留**临时目录调试，加 `CLIENT_E2E_KEEP_TMP=1`。
+
+如果报告里 `Blocking config changes` 非空，**先确认这一段时间外部没用 codex/claude**。如果确实没用，那就是 runner 隔离不彻底或 codex/claude CLI 在 `--ignore-user-config` / `--bare` 下仍写了用户文件——这是 runner 真问题，需要查。

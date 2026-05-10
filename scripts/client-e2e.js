@@ -18,6 +18,11 @@ const { spawn } = require('child_process');
 
 const providerRegistry = require('../src/providers');
 const proxyBundle = require('../src/proxy-bundle');
+const autostart = require('../src/autostart');
+
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+const DEFAULT_REPORT_DIR = path.join(PROJECT_ROOT, '自动化测试', 'V0.5');
+const DEFAULT_REPORT_BASENAME = 'CLIENT_E2E_REPORT_LATEST';
 
 const API_KEY_ENV = {
   deepseek: ['DEEPSEEK_API_KEY', 'DEEPSEEK_CLAUDE_API_KEY'],
@@ -26,19 +31,25 @@ const API_KEY_ENV = {
 const DEFAULT_TARGETS = ['claude-text', 'claude-tool', 'codex-tool'];
 const CLAUDE_FLAGS = ['--bare', '--settings', '--no-session-persistence', '--permission-mode', '--model', '--print'];
 const CODEX_FLAGS = ['--ignore-user-config', '--ignore-rules', '--ephemeral', '--sandbox', '--cd', '--output-last-message', '--json'];
+// 用户真实配置文件清单 —— 只列 runner 自己有可能写、且 release gate 真正在意的路径。
+//
+// 已经从清单里**移除**的几类：
+// - 跨平台自启资源：`~/Library/LaunchAgents/...` 等用 autostart.isInstalled() fingerprint 替代，
+//   见 snapshotUserConfigs 里的 __autostart 字段。
+// - `os.tmpdir()/deepseek-claude-proxy.log`：用户正常 17861 代理一直在写，必误报；
+//   E2E 已用 DEEPSEEK_CLAUDE_LOG_PATH 隔离到 <tmp>/logs/gateway.log。
+// - `~/.claude.json`：Claude Code 用户级状态/统计文件，runner 从不写它（settings-patcher
+//   只改 `~/.claude/settings.json`），但外部 Claude 会话每分钟都在写它，监控它必误报。
 function userConfigPaths() {
   return [
     '~/.claude/settings.json',
     '~/.claude/settings.json.deepseek-backup',
-    '~/.claude.json',
     '~/.codex/config.toml',
     '~/.codex/config.toml.deepseek-backup',
     '~/.codex/auth.json',
     '~/.deepseek-claude/config.json',
     '~/.deepseek-claude/proxy.js',
     '~/.deepseek-claude/proxy',
-    '~/Library/LaunchAgents/com.deepseek.claude-proxy.plist',
-    path.join(os.tmpdir(), 'deepseek-claude-proxy.log'),
   ];
 }
 
@@ -95,13 +106,28 @@ function snapshotUserConfigs() {
   for (const label of userConfigPaths()) {
     result[label] = hashPath(expandHome(label));
   }
+  // 跨平台自启 fingerprint：复用 src/autostart 抽象（mac=plist 文件存在，
+  // win32=schtasks 任务存在 + Startup VBS fallback，linux=永远 false）。
+  // 用 isInstalled() 的布尔值即可——E2E 关心的是"自启状态有没有被改"，不是绝对值。
+  try {
+    result['__autostart'] = { exists: true, type: 'fingerprint', sha256: autostart.isInstalled() ? '1' : '0' };
+  } catch {
+    result['__autostart'] = { exists: false };
+  }
   return result;
 }
 
+// 只比较 sha256 + exists + type，忽略 size/mtime。
+// 原因：codex 在 --ignore-user-config 下仍会 touch ~/.codex/config.toml 的 mtime，
+// 但内容未变；如果 stringify 整字段比较，touch-only 会被误报为污染。
 function diffSnapshots(before, after) {
   const changes = [];
   for (const key of Object.keys(before)) {
-    if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) changes.push(key);
+    const b = before[key] || {};
+    const a = after[key] || {};
+    if (b.exists !== a.exists || b.type !== a.type || b.sha256 !== a.sha256) {
+      changes.push(key);
+    }
   }
   return changes;
 }
@@ -145,6 +171,14 @@ function baseEnv(homeDir) {
   };
   for (const key of ['LANG', 'LC_ALL', 'LC_CTYPE', 'SHELL', 'TERM']) {
     if (process.env[key]) env[key] = process.env[key];
+  }
+  // Windows 下 Node child_process 缺 SYSTEMROOT 会挂；找可执行文件需要 PATHEXT；
+  // 一些子进程会读 APPDATA / LOCALAPPDATA / USERPROFILE 取用户配置。
+  if (process.platform === 'win32') {
+    for (const key of ['SYSTEMROOT', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE',
+                       'PATHEXT', 'WINDIR', 'TEMP', 'TMP', 'COMSPEC']) {
+      if (process.env[key]) env[key] = process.env[key];
+    }
   }
   return env;
 }
@@ -235,7 +269,7 @@ function makeContext(options, apiKeySource) {
       DISABLE_AUTOUPDATER: '1',
     },
   }, null, 2));
-  fs.writeFileSync(path.join(dirs.root, 'empty-mcp.json'), '{}\n');
+  fs.writeFileSync(path.join(dirs.root, 'empty-mcp.json'), JSON.stringify({ mcpServers: {} }, null, 2));
   return {
     runId,
     startedAt: nowIso(),
@@ -267,8 +301,8 @@ function redactor(secrets) {
   };
 }
 
-async function commandText(command, args, timeoutMs) {
-  const result = await runCommand(command, args, { timeoutMs });
+async function commandText(command, args, timeoutMs, env) {
+  const result = await runCommand(command, args, { timeoutMs, env });
   return { ok: result.code === 0, text: `${result.stdout}\n${result.stderr}`, result };
 }
 
@@ -278,30 +312,47 @@ async function preflight(options) {
   const needsClaude = options.targets.some(t => t.startsWith('claude'));
   const needsCodex = options.targets.some(t => t.startsWith('codex'));
   let claudePermissionMode = 'permission-mode';
+  const preflightRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'deepseek-client-e2e-preflight-'));
 
-  if (needsClaude) {
-    const version = await commandText(options.claudeBin, ['--version'], 10000);
-    const help = await commandText(options.claudeBin, ['--help'], 10000);
-    versions.claude = tail(version.text, 500).trim();
-    if (!version.ok || !help.ok) errors.push('Claude Code CLI 不存在或不可执行');
-    for (const flag of CLAUDE_FLAGS) {
-      if (!help.text.includes(flag)) errors.push(`Claude Code 缺少必要参数 ${flag}`);
+  try {
+    if (needsClaude) {
+      const claudeHome = path.join(preflightRoot, 'claude-home');
+      fs.mkdirSync(claudeHome, { recursive: true });
+      const env = {
+        ...baseEnv(claudeHome),
+        CLAUDE_CONFIG_DIR: claudeHome,
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+        CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: '1',
+        DISABLE_AUTOUPDATER: '1',
+      };
+      const version = await commandText(options.claudeBin, ['--version'], 10000, env);
+      const help = await commandText(options.claudeBin, ['--help'], 10000, env);
+      versions.claude = tail(version.text, 500).trim();
+      if (!version.ok || !help.ok) errors.push('Claude Code CLI 不存在或不可执行');
+      for (const flag of CLAUDE_FLAGS) {
+        if (!help.text.includes(flag)) errors.push(`Claude Code 缺少必要参数 ${flag}`);
+      }
+      if (!help.text.includes('bypassPermissions')) {
+        if (help.text.includes('--dangerously-skip-permissions')) claudePermissionMode = 'dangerously-skip-permissions';
+        else errors.push('Claude Code 缺少 bypassPermissions 或 dangerously-skip-permissions');
+      }
     }
-    if (!help.text.includes('bypassPermissions')) {
-      if (help.text.includes('--dangerously-skip-permissions')) claudePermissionMode = 'dangerously-skip-permissions';
-      else errors.push('Claude Code 缺少 bypassPermissions 或 dangerously-skip-permissions');
-    }
-  }
 
-  if (needsCodex) {
-    const version = await commandText(options.codexBin, ['--version'], 10000);
-    const help = await commandText(options.codexBin, ['exec', '--help'], 10000);
-    versions.codex = tail(version.text, 500).trim();
-    if (!version.ok || !help.ok) errors.push('Codex CLI 不存在或不可执行');
-    for (const flag of CODEX_FLAGS) {
-      if (!help.text.includes(flag)) errors.push(`Codex CLI 缺少必要参数 ${flag}`);
+    if (needsCodex) {
+      const codexHome = path.join(preflightRoot, 'codex-home');
+      fs.mkdirSync(codexHome, { recursive: true });
+      const env = { ...baseEnv(codexHome), CODEX_HOME: codexHome };
+      const version = await commandText(options.codexBin, ['--version'], 10000, env);
+      const help = await commandText(options.codexBin, ['exec', '--help'], 10000, env);
+      versions.codex = tail(version.text, 500).trim();
+      if (!version.ok || !help.ok) errors.push('Codex CLI 不存在或不可执行');
+      for (const flag of CODEX_FLAGS) {
+        if (!help.text.includes(flag)) errors.push(`Codex CLI 缺少必要参数 ${flag}`);
+      }
+      if (!help.text.includes('-c, --config')) errors.push('Codex CLI 缺少 -c/--config 覆盖能力');
     }
-    if (!help.text.includes('-c, --config')) errors.push('Codex CLI 缺少 -c/--config 覆盖能力');
+  } finally {
+    fs.rmSync(preflightRoot, { recursive: true, force: true });
   }
 
   return { ok: errors.length === 0, errors, versions, claudePermissionMode };
@@ -339,21 +390,31 @@ async function startGateway(ctx, model, apiKey) {
       DEEPSEEK_CLAUDE_PROXY_PORT: String(port),
       DEEPSEEK_CLAUDE_LOG_PATH: ctx.logPath,
     };
-    const child = spawn(process.execPath, [proxyScript], { env, detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    // Windows 上 spawn detached + windowsHide:true 才能不弹黑窗；mac 上 windowsHide 是 noop。
+    const child = spawn(process.execPath, [proxyScript], {
+      env, detached: true, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
+    });
     let stderr = '';
     child.stderr.on('data', d => { stderr += d.toString(); });
     child.unref();
     const started = Date.now();
     while (Date.now() - started < 15000) {
       const health = await requestJson(port, '/__health');
-      if (health.body?.service === 'deepseek-claude-proxy') {
+      // PRD US-33 步骤 4 要求 service + provider + model 三字段一致；
+      // 配错的 provider 或 model 会被这道闸抓住，而不是等到真请求才挂。
+      if (
+        health.body?.service === 'deepseek-claude-proxy'
+        && health.body?.provider === ctx.options.providerId
+        && health.body?.model === model
+      ) {
         redactGatewayConfig(ctx);
         return { port, child, health: health.body };
       }
       await new Promise(r => setTimeout(r, 400));
     }
     lastError = stderr || `gateway health timeout on port ${port}`;
-    try { child.kill('SIGTERM'); } catch {}
+    // 不指定 signal：Node 在 Windows 用 TerminateProcess、mac 用 SIGTERM，自动适配。
+    try { child.kill(); } catch {}
   }
   throw new Error(lastError);
 }
@@ -362,7 +423,8 @@ async function stopGateway(gateway) {
   if (!gateway?.port) return;
   await requestJson(gateway.port, '/__stop', 'POST');
   await new Promise(r => setTimeout(r, 500));
-  try { gateway.child?.kill('SIGTERM'); } catch {}
+  // 不指定 signal：跨平台兜底 kill。
+  try { gateway.child?.kill(); } catch {}
 }
 
 function prepareWorkspace(ctx, model, kind) {
@@ -376,9 +438,11 @@ function prepareWorkspace(ctx, model, kind) {
 function claudeEnv(ctx, port) {
   const env = {
     ...baseEnv(ctx.dirs.claudeHome),
+    CLAUDE_CONFIG_DIR: ctx.dirs.claudeHome,
     ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`,
     ANTHROPIC_API_KEY: 'client-e2e-token',
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: '1',
     DISABLE_AUTOUPDATER: '1',
   };
   return env;
@@ -398,7 +462,7 @@ function claudeArgs(ctx, model, prompt, mode, useBash) {
   ];
   if (mode === 'dangerously-skip-permissions') args.push('--dangerously-skip-permissions');
   else args.push('--permission-mode', 'bypassPermissions');
-  if (useBash) args.push('--tools', 'Bash');
+  if (useBash) args.push('--tools=Bash');
   args.push(prompt);
   return args;
 }
@@ -513,12 +577,13 @@ async function runCodexLong(ctx, gateway, model, redact) {
   const ws = prepareWorkspace(ctx, model, 'codex-long');
   await initGit(ws.dir);
   const outputFile = path.join(ctx.dirs.logs, `codex-long-${safeName(model)}.txt`);
+  // 长链路用 Node 内置 http + assert 跑测试，不依赖 bash/curl，跨平台一致。
   const prompt = [
     '写一个 Node.js HTTP 文件管理服务，只使用 Node 内置模块。',
     '1. 创建 server.js，支持 GET /、GET /files、GET /files/:name、POST /files/:name、DELETE /files/:name。',
     '2. 文件存到 ./data。',
-    '3. 创建 test.sh，用 curl 跑 7 个断言，最后输出 ALL 7 TESTS PASS。',
-    '4. 实际运行 bash test.sh，修到测试通过。',
+    '3. 创建 test.js（不是 test.sh），只用 Node 内置 http 和 assert 模块跑 7 个断言，最后用 console.log 输出一行：ALL 7 TESTS PASS。',
+    '4. 实际运行 `node test.js`，修到测试通过。',
   ].join('\n');
   const start = logSize(ctx);
   const env = { ...baseEnv(ctx.dirs.codexHome), CODEX_HOME: ctx.dirs.codexHome };
@@ -527,9 +592,10 @@ async function runCodexLong(ctx, gateway, model, redact) {
     env,
     timeoutMs: ctx.options.longTimeoutMs,
   });
-  const verify = fs.existsSync(path.join(ws.dir, 'test.sh'))
-    ? await runCommand('bash', ['test.sh'], { cwd: ws.dir, timeoutMs: 120000 })
-    : { code: 1, stdout: '', stderr: 'missing test.sh', durationMs: 0 };
+  // 二次跑测试：runner 自己执行一次，确认模型不是只在最终消息里 echo "ALL 7 TESTS PASS" 字符串。
+  const verify = fs.existsSync(path.join(ws.dir, 'test.js'))
+    ? await runCommand(process.execPath, ['test.js'], { cwd: ws.dir, timeoutMs: 120000 })
+    : { code: 1, stdout: '', stderr: 'missing test.js', durationMs: 0 };
   const caseLog = logSlice(ctx, start);
   const passed = result.code === 0
     && fs.existsSync(path.join(ws.dir, 'server.js'))
@@ -600,8 +666,19 @@ function reportSummary(ctx) {
   const passed = ctx.cases.filter(c => c.status === 'PASS');
   const skipped = ctx.cases.filter(c => String(c.status).startsWith('SKIPPED'));
   const cleanupFailed = ctx.cleanup && ctx.cleanup !== 'ok' && ctx.cleanup !== 'kept';
-  const status = failed.length || ctx.configChanges.length || ctx.secretScan.length || cleanupFailed ? 'FAIL' : 'PASS';
-  return { status, passed: passed.length, failed: failed.length, skipped: skipped.length };
+  const blockingChanges = blockingConfigChanges(ctx);
+  const status = failed.length || blockingChanges.length || ctx.secretScan.length || cleanupFailed ? 'FAIL' : 'PASS';
+  return { status, passed: passed.length, failed: failed.length, skipped: skipped.length, blockingConfigChanges: blockingChanges };
+}
+
+function blockingConfigChanges(ctx) {
+  const hasClaude = ctx.options.targets.some(t => t.startsWith('claude'));
+  const hasCodex = ctx.options.targets.some(t => t.startsWith('codex'));
+  return ctx.configChanges.filter(item => {
+    if (item.startsWith('~/.claude') || item === '~/.claude.json') return hasClaude;
+    if (item.startsWith('~/.codex')) return hasCodex;
+    return true;
+  });
 }
 
 function markdownReport(ctx) {
@@ -627,6 +704,7 @@ function markdownReport(ctx) {
   }
   lines.push('', '## Safety Checks', '');
   lines.push(`- User config changes: ${ctx.configChanges.length ? ctx.configChanges.join(', ') : 'none'}`);
+  lines.push(`- Blocking config changes: ${summary.blockingConfigChanges.length ? summary.blockingConfigChanges.join(', ') : 'none'}`);
   lines.push(`- Secret scan hits: ${ctx.secretScan.length ? ctx.secretScan.join(', ') : 'none'}`);
   lines.push(`- Cleanup: ${ctx.cleanup}`);
   return lines.join('\n') + '\n';
@@ -665,15 +743,37 @@ function redactGatewayConfig(ctx) {
 }
 
 function writeReports(ctx, redact) {
-  fs.mkdirSync(ctx.dirs.root, { recursive: true });
   const json = redact(JSON.stringify({ ...ctx, summary: reportSummary(ctx) }, null, 2));
   const md = redact(markdownReport(ctx));
-  fs.writeFileSync(path.join(ctx.dirs.root, 'report.json'), json);
-  fs.writeFileSync(path.join(ctx.dirs.root, 'report.md'), md);
-  if (ctx.options.reportPath) {
-    fs.mkdirSync(path.dirname(path.resolve(ctx.options.reportPath)), { recursive: true });
-    fs.writeFileSync(ctx.options.reportPath, md);
+
+  // 1) 默认 latest 报告落到项目目录，不会随 tmp 一起被删——满足 PRD 1.5"自动生成报告"。
+  try {
+    fs.mkdirSync(DEFAULT_REPORT_DIR, { recursive: true });
+    fs.writeFileSync(path.join(DEFAULT_REPORT_DIR, `${DEFAULT_REPORT_BASENAME}.md`), md);
+    fs.writeFileSync(path.join(DEFAULT_REPORT_DIR, `${DEFAULT_REPORT_BASENAME}.json`), json);
+  } catch (err) {
+    console.error(`[client-e2e] 默认报告写入失败: ${err.message}`);
   }
+
+  // 2) 临时目录里留一份（keepTmp=1 时调试用；如果 cleanup 已经把 tmp 删了就跳过）
+  try {
+    if (ctx.dirs?.root && fs.existsSync(ctx.dirs.root)) {
+      fs.writeFileSync(path.join(ctx.dirs.root, 'report.json'), json);
+      fs.writeFileSync(path.join(ctx.dirs.root, 'report.md'), md);
+    }
+  } catch {}
+
+  // 3) 用户通过 CLIENT_E2E_REPORT 显式指定的额外路径（叠加，不替换默认）
+  if (ctx.options.reportPath) {
+    try {
+      const target = path.resolve(ctx.options.reportPath);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, md);
+    } catch (err) {
+      console.error(`[client-e2e] CLIENT_E2E_REPORT 写入失败: ${err.message}`);
+    }
+  }
+
   console.log(md);
 }
 
@@ -699,17 +799,20 @@ async function main() {
       ...scanForSecret(process.cwd(), apiKey).map(p => `project:${p}`),
       ...scanForSecret(ctx.dirs.root, apiKey).map(p => `tmp:${p}`),
     ];
-    if (options.keepTmp) ctx.cleanup = 'kept';
-    else {
-      fs.rmSync(ctx.dirs.root, { recursive: true, force: true });
-      ctx.cleanup = 'ok';
+    // 顺序：先 cleanup（设 ctx.cleanup 值 + 真删 tmp），再 writeReports。
+    // 这样报告里的 cleanup 字段和 reportSummary 计算 status 时拿到的是最终值。
+    if (options.keepTmp) {
+      ctx.cleanup = 'kept';
+    } else {
+      try {
+        fs.rmSync(ctx.dirs.root, { recursive: true, force: true });
+        ctx.cleanup = 'ok';
+      } catch (err) {
+        ctx.cleanup = `failed: ${err.message}`;
+      }
     }
-    if (options.keepTmp) writeReports(ctx, redact);
-    else {
-      fs.mkdirSync(ctx.dirs.root, { recursive: true });
-      writeReports(ctx, redact);
-      fs.rmSync(ctx.dirs.root, { recursive: true, force: true });
-    }
+    // writeReports：默认 latest 写到项目目录；tmp 内部报告如果 tmp 已删则跳过。
+    writeReports(ctx, redact);
     process.exit(reportSummary(ctx).status === 'PASS' ? 0 : 1);
   } catch (err) {
     ctx.configChanges = diffSnapshots(before, snapshotUserConfigs());
@@ -717,12 +820,17 @@ async function main() {
     try { redactGatewayConfig(ctx); } catch {}
     ctx.secretScan = [
       ...scanForSecret(process.cwd(), apiKey).map(p => `project:${p}`),
-      ...scanForSecret(ctx.dirs.root, apiKey).map(p => `tmp:${p}`),
+      ...(ctx.dirs?.root ? scanForSecret(ctx.dirs.root, apiKey).map(p => `tmp:${p}`) : []),
     ];
-    if (options.keepTmp) ctx.cleanup = 'kept';
-    else {
-      fs.rmSync(ctx.dirs.root, { recursive: true, force: true });
-      ctx.cleanup = 'ok';
+    if (options.keepTmp) {
+      ctx.cleanup = 'kept';
+    } else if (ctx.dirs?.root) {
+      try {
+        fs.rmSync(ctx.dirs.root, { recursive: true, force: true });
+        ctx.cleanup = 'ok';
+      } catch (err) {
+        ctx.cleanup = `failed: ${err.message}`;
+      }
     }
     writeReports(ctx, redact);
     process.exit(1);

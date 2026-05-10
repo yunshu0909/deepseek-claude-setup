@@ -22,3 +22,6 @@ yarn-error.log*
 *.swp
 *.swo
 *~
+
+# Client E2E latest report (auto-regenerated each run)
+自动化测试/V0.5/CLIENT_E2E_REPORT_LATEST.*
