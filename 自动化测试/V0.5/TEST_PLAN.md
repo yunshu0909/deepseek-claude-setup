@@ -139,14 +139,14 @@ npm run smoke:provider
 测试形态：
 
 ```text
-claude --bare --print --model <model>
+npm run e2e:clients
 ```
 
 必须覆盖：
 
 - 文本闭环：模型返回指定 marker。
-- 工具闭环：Claude Code 实际调用 Bash 读取 `package.json`，最终输出 `deepseek-claude-setup`。
-- 环境隔离：用环境变量临时指定 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / model，不修改 `~/.claude/settings.json`。
+- 工具闭环：Claude Code 实际调用 Bash 读取随机 `package.json`，写出 `bash-proof.txt`，最终输出随机 package name。
+- 环境隔离：使用临时 `HOME`、`--bare`、`--settings`、`--setting-sources local`、dummy `ANTHROPIC_API_KEY`，不修改 `~/.claude/settings.json`。
 
 智谱模型矩阵：
 
@@ -170,21 +170,21 @@ claude --bare --print --model <model>
 测试形态：
 
 ```text
-codex exec -c model_provider=... -c model_providers.<id>.base_url=http://127.0.0.1:<port>/v1
+npm run e2e:clients
 ```
 
 必须覆盖：
 
 - 临时 `CODEX_HOME`，不读写用户真实 `~/.codex/config.toml`。
-- `--ignore-user-config` + `--ephemeral`。
-- 单工具闭环：实际调用 shell 读取 `package.json`。
+- `--ignore-user-config` + `--ignore-rules` + `--ephemeral`。
+- 单工具闭环：实际调用 shell 读取随机 `package.json`，最终输出随机 package name。
 - 模型矩阵：`glm-5.1` / `glm-5` / `glm-5-turbo` / `glm-4.7`。
 - proxy 日志无本次测试产生的 `RESPONSES_FAILED`。
 
 通过标准：
 
 - CLI exit code 为 0。
-- 输出包含 `deepseek-claude-setup`。
+- 输出包含本次随机 package name。
 - proxy 日志有 `RESPONSES_DONE`，且工具轮次 `tools=1`。
 
 ### 2.6 L5 Codex 长链路项目闭环
@@ -213,6 +213,12 @@ codex exec -c model_provider=... -c model_providers.<id>.base_url=http://127.0.0
 
 ```text
 ALL 7 TESTS PASS
+```
+
+标准 runner：
+
+```bash
+CLIENT_E2E_LONG=1 npm run e2e:clients
 ```
 
 ## 3. Provider 专项规则

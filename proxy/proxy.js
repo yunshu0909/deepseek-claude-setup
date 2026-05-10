@@ -23,8 +23,8 @@ const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 const PORT = process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? Number(process.env.DEEPSEEK_CLAUDE_PROXY_PORT) : 17861;
 const SERVICE_NAME = 'deepseek-claude-proxy';
 
-// 日志路径用 os.tmpdir() 跨平台（macOS: /var/folders/.../T/，Win: %TEMP%，Linux: /tmp/）
-const LOG_PATH = path.join(os.tmpdir(), 'deepseek-claude-proxy.log');
+// 测试 runner 需要独立日志，避免和用户正常 17861 代理混在一起误判。
+const LOG_PATH = process.env.DEEPSEEK_CLAUDE_LOG_PATH || path.join(os.tmpdir(), 'deepseek-claude-proxy.log');
 
 function log(msg) {
   const ts = new Date().toISOString().slice(11, 19);

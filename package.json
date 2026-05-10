@@ -7,7 +7,8 @@
   },
   "scripts": {
     "test": "node test.js && node test/provider-runtime.test.js",
-    "smoke:provider": "node scripts/provider-smoke.js"
+    "smoke:provider": "node scripts/provider-smoke.js",
+    "e2e:clients": "node scripts/client-e2e.js"
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0"
