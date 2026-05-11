@@ -116,12 +116,13 @@ async function stepApiKey(provider, existing) {
     });
     if (isCancel(key)) return null;
 
-    if (provider.id !== 'deepseek') return key;
     const s = spinner();
     s.start('验证 API Key...');
-    const ok = await verifier.checkApiKey(key);
+    // checkApiKey 按 provider 自身 anthropicBaseUrl + 默认模型校验；
+    // 没有 Anthropic 端点的 provider 会直接返回 true（接受 key，由后续接入流程兜底）
+    const ok = await verifier.checkApiKey(provider, key);
     if (ok) { s.stop('✅ API Key 验证通过'); return key; }
-    s.stop('❌ API Key 无效，请重新输入');
+    s.stop('❌ API Key 无效或网络异常，请重新输入');
   }
 }
 
