@@ -802,6 +802,7 @@ async function runSequenceMatrix(ctx, apiKeyMap, preflightInfo, redact, matrixCa
     for (const c of caseList) {
       console.log(`[matrix] === ${c.id} | ${c.desc} (probe=${c.probe || 'claude'}${c.stateLeak ? ' / state-leak' : ''}) ===`);
 
+      let previousStep = null;
       for (const step of c.steps) {
         const stepName = `${c.id}.step-${step.index}-${step.raw.replace(/[^a-z0-9.-]+/gi, '_')}`;
         console.log(`[matrix] ▶ ${stepName} (${step.providerId}:${step.model}:${step.thinking}:${step.effort})`);
@@ -841,6 +842,17 @@ async function runSequenceMatrix(ctx, apiKeyMap, preflightInfo, redact, matrixCa
         };
         const assertResult = capabilityAsserts.assertCapture(captureServer.jsonl, stepName, step.provider, runConfig);
 
+        // PRD-007 US-48 state leak 真探针：c.stateLeak=true 时，对当前 step 的首请求
+        // 额外断言 from-provider 专属字段不残留。违反时 rule='state-leak'（区别于普通 mustNotHave）。
+        // 仅在 step.index >= 2 时启用（首个 step 没有 from）；跨 provider 才有 leak 意义。
+        let stateLeakResult = { passed: true, firstEntries: 0, violations: [] };
+        if (c.stateLeak && previousStep && previousStep.providerId !== step.providerId) {
+          stateLeakResult = capabilityAsserts.assertStateLeak(captureServer.jsonl, stepName, previousStep.provider);
+        }
+
+        const allViolations = [...assertResult.violations, ...stateLeakResult.violations];
+        const allPassed = assertResult.passed && stateLeakResult.passed;
+
         const stepCase = {
           name: stepName,
           caseId: c.id,
@@ -849,20 +861,24 @@ async function runSequenceMatrix(ctx, apiKeyMap, preflightInfo, redact, matrixCa
           provider: step.providerId,
           probe: probes.join('+'),
           stateLeak: !!c.stateLeak,
-          status: probeOk && assertResult.passed ? 'PASS' : 'FAIL',
+          stateLeakProbeRun: c.stateLeak && previousStep && previousStep.providerId !== step.providerId,
+          status: probeOk && allPassed ? 'PASS' : 'FAIL',
           durationMs: probeResults.reduce((s, r) => s + (r.durationMs || 0), 0),
           captureEntries: assertResult.entries,
-          violations: assertResult.violations,
+          violations: allViolations,
           probeResults: probeResults.map(r => ({ probe: r.probe, code: r.code, durationMs: r.durationMs, stdout: redact(tail(r.stdout, 200)), stderr: redact(tail(r.stderr, 200)) })),
           errorType: probeOk
-            ? (assertResult.passed ? '' : 'capability-violations')
+            ? (allPassed ? '' : (stateLeakResult.violations.length ? 'state-leak' : 'capability-violations'))
             : 'probe-failed',
         };
         ctx.cases.push(stepCase);
-        const vSummary = assertResult.violations.length
-          ? assertResult.violations.slice(0, 3).map(v => `${v.rule}:${v.field}`).join(',')
+        const vSummary = allViolations.length
+          ? allViolations.slice(0, 3).map(v => `${v.rule}:${v.field}`).join(',')
           : '';
-        console.log(`[matrix]   ${stepCase.status}  probes=${probes.join('+')} capture-entries=${assertResult.entries} violations=${assertResult.violations.length}${vSummary ? ' [' + vSummary + ']' : ''}`);
+        const leakTag = stepCase.stateLeakProbeRun ? ' state-leak-probe' : '';
+        console.log(`[matrix]   ${stepCase.status}  probes=${probes.join('+')} capture-entries=${assertResult.entries} violations=${allViolations.length}${leakTag}${vSummary ? ' [' + vSummary + ']' : ''}`);
+
+        previousStep = step;
       }
     }
   } finally {

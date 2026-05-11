@@ -194,4 +194,100 @@ function assertCapture(jsonlPath, step, provider, runConfig) {
   return { passed: violations.length === 0, entries, violations };
 }
 
-module.exports = { expectedFields, assertEntry, assertCapture, classifyPath, getField };
+/**
+ * PRD-007 US-48 state leak 真探针辅助
+ *
+ * 推导 from-provider 在切换前可能注入到 upstream payload 的"专属字段"清单。
+ * 切换到 to-provider 后第一个 capture entry 必须**绝对不含**这些字段——否则就是 state leak。
+ *
+ * 设计原则：这跟 capability-asserts 普通规则的区别是
+ *   - 普通规则按 to-provider 的 capability 反推"该有/不该有"；mustNotHave 已经覆盖大部分 leak
+ *   - state-leak 探针从 from-provider 视角再单独列一遍专属字段，违反时 rule 标 'state-leak'
+ *     这样报告能区分"to-provider 普通断言违反"和"from-provider 残留字段"两类问题，
+ *     便于定位是 gateway 配置切换不彻底还是 capability 声明不一致。
+ *
+ * @param {object} provider - from-provider 元数据
+ * @returns {{anthropic: string[], chat: string[]}} 字段清单（按路径分）
+ */
+function fromProviderExclusiveFields(provider) {
+  const caps = provider?.capabilities || {};
+  const fields = { anthropic: [], chat: [] };
+
+  // Anthropic path 字段：provider 支持 thinking 注入时会发 thinking/output_config
+  if (caps.thinking !== false && caps.anthropicThinking !== false) {
+    fields.anthropic.push('thinking');           // type=enabled/disabled
+    if (caps.thinkingEffort !== false) {
+      fields.anthropic.push('output_config');    // {effort: max/high}
+    }
+  }
+
+  // Chat path 字段：thinkingEffort 支持时会发 reasoning_effort
+  if (caps.thinking !== false && caps.thinkingEffort !== false) {
+    fields.chat.push('reasoning_effort');
+  }
+  // 智谱专属注入
+  if (caps.preservedThinking === 'clear_thinking') {
+    fields.chat.push('clear_thinking');
+  }
+  if (caps.toolStreamParam) {
+    fields.chat.push(caps.toolStreamParam);      // 'tool_stream'
+  }
+
+  return fields;
+}
+
+/**
+ * 对当前 step 的第一个 capture entry 跑 state-leak 断言：
+ * from-provider 的专属字段绝对不该出现在 to-provider 的首请求 payload 里。
+ *
+ * @param {string} jsonlPath
+ * @param {string} step - 当前 step 名（to）
+ * @param {object} fromProvider - 上一个 step 的 provider 元数据
+ * @returns {{passed: boolean, firstEntries: number, violations: Array}}
+ */
+function assertStateLeak(jsonlPath, step, fromProvider) {
+  const fs = require('fs');
+  if (!fs.existsSync(jsonlPath)) return { passed: true, firstEntries: 0, violations: [] };
+  const exclusive = fromProviderExclusiveFields(fromProvider);
+
+  // 收集当前 step 的所有 entries，按 anthropic / chat 分别取第一条
+  const lines = fs.readFileSync(jsonlPath, 'utf-8').split('\n').filter(Boolean);
+  const firstByKind = { anthropic: null, chat: null };
+  for (const line of lines) {
+    let entry;
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (entry.step !== step) continue;
+    const kind = classifyPath(entry.path);
+    if (!kind || firstByKind[kind]) continue;
+    firstByKind[kind] = entry;
+  }
+
+  const violations = [];
+  let firstEntries = 0;
+  for (const kind of ['anthropic', 'chat']) {
+    const entry = firstByKind[kind];
+    if (!entry) continue;
+    firstEntries++;
+    const body = entry.body && typeof entry.body === 'object' ? entry.body : {};
+    for (const field of exclusive[kind]) {
+      const actual = getField(body, field);
+      if (actual !== undefined) {
+        violations.push({
+          rule: 'state-leak',
+          field,
+          reason: `from-provider (${fromProvider.id}) 专属字段残留在切换后首请求 (${kind} path)`,
+          actual,
+          step,
+          path: entry.path,
+        });
+      }
+    }
+  }
+
+  return { passed: violations.length === 0, firstEntries, violations };
+}
+
+module.exports = {
+  expectedFields, assertEntry, assertCapture, classifyPath, getField,
+  fromProviderExclusiveFields, assertStateLeak,
+};
