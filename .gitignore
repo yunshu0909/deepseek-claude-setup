@@ -25,3 +25,4 @@ yarn-error.log*
 
 # Client E2E latest report (auto-regenerated each run)
 自动化测试/V0.5/CLIENT_E2E_REPORT_LATEST.*
+自动化测试/V0.6/CLIENT_E2E_MATRIX_LATEST.*

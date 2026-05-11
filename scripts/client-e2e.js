@@ -19,14 +19,20 @@ const { spawn } = require('child_process');
 const providerRegistry = require('../src/providers');
 const proxyBundle = require('../src/proxy-bundle');
 const autostart = require('../src/autostart');
+const capabilityAsserts = require('./lib/capability-asserts');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_REPORT_DIR = path.join(PROJECT_ROOT, '自动化测试', 'V0.5');
 const DEFAULT_REPORT_BASENAME = 'CLIENT_E2E_REPORT_LATEST';
+// PRD-007 SEQUENCE 模式专用报告目录（V0.6）
+const MATRIX_REPORT_DIR = path.join(PROJECT_ROOT, '自动化测试', 'V0.6');
+const MATRIX_REPORT_BASENAME = 'CLIENT_E2E_MATRIX_LATEST';
+const CAPTURE_PORT_RANGE = [24000, 26000];
 
 const API_KEY_ENV = {
   deepseek: ['DEEPSEEK_API_KEY', 'DEEPSEEK_CLAUDE_API_KEY'],
   zai: ['ZAI_API_KEY', 'ZHIPU_API_KEY', 'BIGMODEL_API_KEY', 'DEEPSEEK_CLAUDE_ZAI_API_KEY'],
+  kimi: ['KIMI_API_KEY', 'MOONSHOT_API_KEY', 'DEEPSEEK_CLAUDE_KIMI_API_KEY'],
 };
 const DEFAULT_TARGETS = ['claude-text', 'claude-tool', 'codex-tool'];
 const CLAUDE_FLAGS = ['--bare', '--settings', '--no-session-persistence', '--permission-mode', '--model', '--print'];
@@ -248,7 +254,68 @@ function readOptions() {
     codexBin: process.env.CLIENT_E2E_CODEX_BIN || 'codex',
     longTimeoutMs: Number(process.env.CLIENT_E2E_LONG_TIMEOUT_MS || 900000),
     retry: process.env.CLIENT_E2E_RETRY === '1',
+    // PRD-007 US-41: 切换序列模式入口
+    sequence: process.env.CLIENT_E2E_SEQUENCE || '',
+    matrix: process.env.CLIENT_E2E_MATRIX || '',
+    captureUpstream: process.env.CLIENT_E2E_CAPTURE_UPSTREAM !== '0', // 默认开
   };
+}
+
+// PRD-007 US-41: 解析 SEQUENCE 字符串到 step 数组
+// 格式：'ds:pro:on:max → ds:flash:off:- → zai:5.1:on:-'
+// 分隔符：→ 或 > 或 ,
+// 字段：provider:model:thinking:effort
+//   - provider: 'ds'|'deepseek'|'zai'|'zhipu'|'kimi'...（匹配 provider id 或别名）
+//   - model: 完整 id 或 suffix（'pro' → 'deepseek-v4-pro'，'5.1' → 'glm-5.1'）
+//   - thinking: 'on'|'enabled'|'off'|'disabled'
+//   - effort: 'high'|'max'|'-'（'-' = placeholder，capability 不支持时用）
+const PROVIDER_ALIASES = { ds: 'deepseek', zhipu: 'zai', glm: 'zai' };
+
+function normalizeProviderId(id) {
+  return PROVIDER_ALIASES[id.toLowerCase()] || id.toLowerCase();
+}
+
+function resolveModelId(provider, modelHint) {
+  if (!modelHint || modelHint === '-') return provider.models?.[0]?.id;
+  const models = provider.models || [];
+  // 完整匹配优先
+  const exact = models.find(m => m.id === modelHint);
+  if (exact) return exact.id;
+  // suffix 匹配（'pro' 匹配 'deepseek-v4-pro'；'5.1' 匹配 'glm-5.1'）
+  const suffix = models.find(m => m.id.endsWith('-' + modelHint) || m.id.endsWith(modelHint));
+  if (suffix) return suffix.id;
+  // contains 兜底
+  const contains = models.find(m => m.id.includes(modelHint));
+  return contains ? contains.id : modelHint;
+}
+
+function normalizeThinkingValue(v) {
+  if (v === 'on' || v === 'enabled') return 'enabled';
+  if (v === 'off' || v === 'disabled') return 'disabled';
+  return 'enabled';
+}
+
+function parseSequence(input) {
+  if (!input) return [];
+  const steps = input.split(/[→>,]/).map(s => s.trim()).filter(Boolean);
+  return steps.map((step, idx) => {
+    const parts = step.split(':');
+    if (parts.length < 2) throw new Error(`Invalid SEQUENCE step '${step}'：需要 provider:model[:thinking[:effort]]`);
+    const [pid, modelHint, thinkingHint, effortHint] = parts;
+    const providerId = normalizeProviderId(pid);
+    const provider = providerRegistry.getProvider(providerId);
+    if (!provider) throw new Error(`SEQUENCE step '${step}' 用了未注册 provider '${providerId}'`);
+    const model = resolveModelId(provider, modelHint);
+    return {
+      index: idx + 1,
+      raw: step,
+      provider,
+      providerId,
+      model,
+      thinking: normalizeThinkingValue(thinkingHint || 'on'),
+      effort: (effortHint && effortHint !== '-') ? effortHint : '-',
+    };
+  });
 }
 
 function makeContext(options, apiKeySource) {
@@ -378,6 +445,47 @@ function writeGatewayConfig(ctx, model, apiKey) {
   try { fs.chmodSync(configPath, 0o600); } catch {}
 }
 
+/**
+ * PRD-007 US-39: 五字段 health 校验
+ *
+ * 字段语义：
+ * - service / provider / model：三字段必须严格相等
+ * - thinking：provider capability.thinking=false 时 health 返回 'unsupported'，否则按 ctx.options.thinking 比对
+ * - effort：provider capability.thinkingEffort=false 时 health 返回 null，否则按 ctx.options.effort 比对
+ *
+ * @param {object} body - GET /__health 响应体
+ * @param {object} ctx - runner context（含 options.providerId / thinking / effort / provider.capabilities）
+ * @param {string} model - 当前 step 的 model id
+ * @returns {boolean} true 表示 health 一致
+ */
+function healthMatches(body, ctx, model) {
+  if (!body) return false;
+  if (body.service !== 'deepseek-claude-proxy') return false;
+  if (body.provider !== ctx.options.providerId) return false;
+  if (body.model !== model) return false;
+
+  const caps = ctx.options.provider?.capabilities || {};
+
+  // thinking 字段：provider 不支持 → 必须为 'unsupported'；支持 → 必须等于 ctx.options.thinking
+  if (caps.thinking === false) {
+    if (body.thinking !== 'unsupported') return false;
+  } else {
+    if (body.thinking !== ctx.options.thinking) return false;
+  }
+
+  // effort 字段：provider 声明 thinkingEffort=false → 必须为 null；
+  // 否则在 thinking=enabled 时按 ctx.options.effort 比对；thinking=disabled 时也应为 null
+  if (caps.thinkingEffort === false) {
+    if (body.effort !== null) return false;
+  } else if (ctx.options.thinking === 'enabled') {
+    if (body.effort !== ctx.options.effort) return false;
+  } else {
+    if (body.effort !== null) return false;
+  }
+
+  return true;
+}
+
 async function startGateway(ctx, model, apiKey) {
   writeGatewayConfig(ctx, model, apiKey);
   const proxyScript = path.join(ctx.dirs.gatewayConfig, 'proxy.js');
@@ -400,13 +508,13 @@ async function startGateway(ctx, model, apiKey) {
     const started = Date.now();
     while (Date.now() - started < 15000) {
       const health = await requestJson(port, '/__health');
-      // PRD US-33 步骤 4 要求 service + provider + model 三字段一致；
-      // 配错的 provider 或 model 会被这道闸抓住，而不是等到真请求才挂。
-      if (
-        health.body?.service === 'deepseek-claude-proxy'
-        && health.body?.provider === ctx.options.providerId
-        && health.body?.model === model
-      ) {
+      // PRD-007 US-39 升级：health 校验从三字段扩到五字段。
+      // - thinking 字段：provider 不支持思考时 healthBody 返回 'unsupported'；
+      //   支持时按 ctx.options.thinking 比对。
+      // - effort 字段：provider 声明 thinkingEffort=false 时 healthBody 返回 null；
+      //   支持时按 ctx.options.effort 比对，且仅在 thinking=enabled 时校验非 null。
+      // 配错任何一项会被这道闸抓住，而不是等到真请求才暴露。
+      if (healthMatches(health.body, ctx, model)) {
         redactGatewayConfig(ctx);
         return { port, child, health: health.body };
       }
@@ -423,8 +531,344 @@ async function stopGateway(gateway) {
   if (!gateway?.port) return;
   await requestJson(gateway.port, '/__stop', 'POST');
   await new Promise(r => setTimeout(r, 500));
-  // 不指定 signal：跨平台兜底 kill。
+  // 不指定 signal：跨平台兜台 kill。
   try { gateway.child?.kill(); } catch {}
+}
+
+// =============== PRD-007 SEQUENCE 切换矩阵模式 ===============
+
+/**
+ * PRD-007 §2.5 测试用例总账
+ *
+ * 每条 case 表达为一个 SEQUENCE 字符串。runner 跑序列时每步都断言；
+ * state leak（X-4 / X-5）跟普通切换共用 SEQUENCE 引擎，只在报告中额外标记。
+ * probe 字段决定跑哪些路径：
+ *   - 'claude'（默认）：只发 Anthropic Messages（覆盖 anthropic path 断言）
+ *   - 'codex'：只发 OpenAI Responses（覆盖 chat path 断言）
+ *   - 'both'：两条路径都跑（DS-T/E、跨切等都需要双路径才能完整覆盖）
+ */
+const MATRIX_CASES = {
+  DS: [
+    { id: 'DS-M1', desc: 'model v4-pro → v4-flash', seq: 'ds:pro:on:max → ds:flash:on:max', probe: 'both' },
+    { id: 'DS-M2', desc: 'model v4-flash → v4-pro', seq: 'ds:flash:on:max → ds:pro:on:max', probe: 'both' },
+    { id: 'DS-T1', desc: 'thinking on → off', seq: 'ds:pro:on:max → ds:pro:off:max', probe: 'both' },
+    { id: 'DS-T2', desc: 'thinking off → on', seq: 'ds:pro:off:max → ds:pro:on:max', probe: 'both' },
+    { id: 'DS-E1', desc: 'effort high → max', seq: 'ds:pro:on:high → ds:pro:on:max', probe: 'both' },
+    { id: 'DS-E2', desc: 'effort max → high', seq: 'ds:pro:on:max → ds:pro:on:high', probe: 'both' },
+  ],
+  ZAI: [
+    { id: 'ZAI-M1', desc: 'model glm-5.1 → glm-5', seq: 'zai:5.1:on:- → zai:5:on:-', probe: 'both' },
+    { id: 'ZAI-M2', desc: 'model glm-5 → glm-5-turbo', seq: 'zai:5:on:- → zai:5-turbo:on:-', probe: 'both' },
+    { id: 'ZAI-M3', desc: 'model glm-5-turbo → glm-4.7', seq: 'zai:5-turbo:on:- → zai:4.7:on:-', probe: 'both' },
+    { id: 'ZAI-M4', desc: 'model glm-4.7 → glm-5.1', seq: 'zai:4.7:on:- → zai:5.1:on:-', probe: 'both' },
+    { id: 'ZAI-T1', desc: 'thinking on → off', seq: 'zai:5.1:on:- → zai:5.1:off:-', probe: 'both' },
+    { id: 'ZAI-T2', desc: 'thinking off → on', seq: 'zai:5.1:off:- → zai:5.1:on:-', probe: 'both' },
+    { id: 'ZAI-E1', desc: 'effort 切换应被忽略', seq: 'zai:5.1:on:high → zai:5.1:on:max', probe: 'both' },
+  ],
+  CROSS: [
+    { id: 'X-1', desc: 'cross DS → zai', seq: 'ds:pro:on:max → zai:5.1:on:-', probe: 'both' },
+    { id: 'X-2', desc: 'cross zai → DS', seq: 'zai:5.1:on:- → ds:pro:on:max', probe: 'both' },
+    { id: 'X-3', desc: 'DS→zai→DS 配置保留', seq: 'ds:flash:on:high → zai:5.1:on:- → ds:flash:on:high', probe: 'both' },
+    { id: 'X-4', desc: 'state leak zai → DS', seq: 'zai:5.1:on:- → ds:pro:on:max', probe: 'both', stateLeak: true },
+    { id: 'X-5', desc: 'state leak DS → zai', seq: 'ds:pro:on:max → zai:5.1:on:-', probe: 'both', stateLeak: true },
+    { id: 'X-6', desc: 'zai→DS→zai 配置保留', seq: 'zai:5.1:off:- → ds:pro:on:max → zai:5.1:off:-', probe: 'both' },
+    { id: 'X-7', desc: '跨切同时改 thinking', seq: 'ds:pro:on:max → zai:5.1:off:-', probe: 'both' },
+    { id: 'X-8', desc: '5 步循环切换', seq: 'ds:pro:on:max → zai:5.1:on:- → ds:flash:on:high → zai:5-turbo:off:- → ds:pro:on:max', probe: 'claude' },
+    { id: 'X-9', desc: '跨切 + 工具调用', seq: 'ds:pro:on:max → zai:5.1:on:-', probe: 'codex' },
+  ],
+  // PRD-007 US-49 模板化复利验证：接 Kimi 作为新 provider 后矩阵自动展开。
+  // Kimi capabilities: thinking=true / thinkingEffort=false / anthropicThinking=false / claudeCode=null
+  // 因此只跑 codex probe（无 Anthropic 端点）+ 不发 reasoning_effort + 无 effort 切换。
+  KIMI: [
+    { id: 'KIMI-M1', desc: 'model k2 → k2-think', seq: 'kimi:k2:on:- → kimi:k2-think:on:-', probe: 'codex' },
+    { id: 'KIMI-M2', desc: 'model k2-think → k2', seq: 'kimi:k2-think:on:- → kimi:k2:on:-', probe: 'codex' },
+    { id: 'KIMI-T1', desc: 'thinking on → off', seq: 'kimi:k2:on:- → kimi:k2:off:-', probe: 'codex' },
+    { id: 'KIMI-T2', desc: 'thinking off → on', seq: 'kimi:k2:off:- → kimi:k2:on:-', probe: 'codex' },
+  ],
+  CROSS_KIMI: [
+    { id: 'XK-1', desc: 'cross DS → kimi', seq: 'ds:pro:on:max → kimi:k2:on:-', probe: 'codex' },
+    { id: 'XK-2', desc: 'cross kimi → DS', seq: 'kimi:k2:on:- → ds:pro:on:max', probe: 'codex' },
+    { id: 'XK-3', desc: 'cross zai → kimi', seq: 'zai:5.1:on:- → kimi:k2:on:-', probe: 'codex' },
+    { id: 'XK-4', desc: 'cross kimi → zai', seq: 'kimi:k2:on:- → zai:5.1:on:-', probe: 'codex' },
+  ],
+};
+
+function expandMatrix(matrixType) {
+  if (!matrixType) return [];
+  const m = String(matrixType).toLowerCase();
+  // switch：DS + ZAI + 双向跨切（22 条）
+  if (m === 'switch') return [...MATRIX_CASES.DS, ...MATRIX_CASES.ZAI, ...MATRIX_CASES.CROSS];
+  // all：含 Kimi 在内的全矩阵（30 条）
+  if (m === 'all') return [
+    ...MATRIX_CASES.DS, ...MATRIX_CASES.ZAI, ...MATRIX_CASES.CROSS,
+    ...MATRIX_CASES.KIMI, ...MATRIX_CASES.CROSS_KIMI,
+  ];
+  if (m === 'ds' || m === 'deepseek') return MATRIX_CASES.DS;
+  if (m === 'zai' || m === 'zhipu') return MATRIX_CASES.ZAI;
+  if (m === 'kimi' || m === 'moonshot') return [...MATRIX_CASES.KIMI, ...MATRIX_CASES.CROSS_KIMI];
+  if (m === 'cross') return MATRIX_CASES.CROSS;
+  throw new Error(`unknown matrix '${matrixType}'：支持 switch / all / ds / zai / kimi / cross`);
+}
+
+
+/**
+ * 启动 capture server 子进程，监听 stdout 等 CAPTURE_SERVER_READY 行；
+ * 端口冲突或启动失败时换端口重试，最多 5 次。
+ */
+async function startCaptureServer(ctx) {
+  const captureDir = path.join(ctx.dirs.root, 'capture');
+  fs.mkdirSync(captureDir, { recursive: true });
+  const captureScript = path.resolve(__dirname, 'upstream-capture-server.js');
+
+  let lastError = '';
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const port = CAPTURE_PORT_RANGE[0] + Math.floor(Math.random() * (CAPTURE_PORT_RANGE[1] - CAPTURE_PORT_RANGE[0]));
+    const env = {
+      ...baseEnv(ctx.dirs.root),
+      CLIENT_E2E_CAPTURE_PORT: String(port),
+      CLIENT_E2E_CAPTURE_DIR: captureDir,
+    };
+    const child = spawn(process.execPath, [captureScript], {
+      env, detached: false, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    let ready = false;
+    let actualPort = 0;
+    child.stdout.on('data', d => {
+      stdout += d.toString();
+      const m = stdout.match(/CAPTURE_SERVER_READY port=(\d+)/);
+      if (m && !ready) { ready = true; actualPort = Number(m[1]); }
+    });
+    child.stderr.on('data', d => { stderr += d.toString(); });
+
+    const started = Date.now();
+    while (Date.now() - started < 5000 && !ready && !child.killed) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (ready) {
+      return { port: actualPort, child, dir: captureDir, jsonl: path.join(captureDir, 'requests.jsonl') };
+    }
+    lastError = stderr || stdout || `capture server timeout on port ${port}`;
+    try { child.kill(); } catch {}
+  }
+  throw new Error(`capture-server-port-exhaust: ${lastError}`);
+}
+
+async function stopCaptureServer(server) {
+  if (!server?.port) return;
+  await requestJson(server.port, '/__stop', 'POST').catch(() => {});
+  await new Promise(r => setTimeout(r, 200));
+  try { server.child?.kill(); } catch {}
+}
+
+async function captureSetStep(server, stepName) {
+  return new Promise(resolve => {
+    const body = JSON.stringify({ name: stepName });
+    const req = http.request({
+      hostname: '127.0.0.1', port: server.port, path: '/__step', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 2000,
+    }, res => { res.resume(); res.on('end', () => resolve(res.statusCode === 200)); });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.write(body); req.end();
+  });
+}
+
+/**
+ * 构建 multi-stanza gateway config：所有 provider 都写进去，每个 provider 的 baseUrl /
+ * anthropicBaseUrl 都指向 capture server。activeProvider + thinking + effort 跟随当前 step。
+ */
+function writeMatrixGatewayConfig(ctx, step, apiKeyMap, captureUrl) {
+  const allProviders = providerRegistry.listProviders();
+  const providersConfig = {};
+  for (const p of allProviders) {
+    const providerConfig = p.normalizeConfig({
+      apiKey: apiKeyMap[p.id] || 'dummy-matrix-key',
+      // 当前 step 的 provider 用其指定 model，其余 provider 用默认 model
+      model: p.id === step.providerId ? step.model : p.models?.[0]?.id,
+      baseUrl: captureUrl,
+      anthropicBaseUrl: captureUrl,
+    });
+    providersConfig[p.id] = providerConfig;
+  }
+
+  fs.mkdirSync(ctx.dirs.gatewayConfig, { recursive: true });
+  proxyBundle.deployProxyBundle(ctx.dirs.gatewayConfig);
+  const configPath = path.join(ctx.dirs.gatewayConfig, 'config.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    activeProvider: step.providerId,
+    thinking: step.thinking,
+    effort: step.effort === '-' ? 'high' : step.effort,
+    providers: providersConfig,
+  }, null, 2));
+  try { fs.chmodSync(configPath, 0o600); } catch {}
+}
+
+/**
+ * 启动 matrix gateway：跟 startGateway 类似，但用 step 而不是 model，且五字段 health 校验
+ */
+async function startMatrixGateway(ctx, step, apiKeyMap, captureServer) {
+  const captureUrl = `http://127.0.0.1:${captureServer.port}`;
+  writeMatrixGatewayConfig(ctx, step, apiKeyMap, captureUrl);
+  const proxyScript = path.join(ctx.dirs.gatewayConfig, 'proxy.js');
+
+  let lastError = '';
+  for (let i = 0; i < 5; i++) {
+    const port = 22000 + Math.floor(Math.random() * 2000);
+    const env = {
+      ...baseEnv(ctx.dirs.root),
+      DEEPSEEK_CLAUDE_CONFIG_DIR: ctx.dirs.gatewayConfig,
+      DEEPSEEK_CLAUDE_PROXY_PORT: String(port),
+      DEEPSEEK_CLAUDE_LOG_PATH: ctx.logPath,
+    };
+    const child = spawn(process.execPath, [proxyScript], {
+      env, detached: true, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true,
+    });
+    let stderr = '';
+    child.stderr.on('data', d => { stderr += d.toString(); });
+    child.unref();
+    const started = Date.now();
+    // 用 step.provider 构造一个临时 ctx-like 对象给 healthMatches 用
+    const matchCtx = {
+      options: {
+        providerId: step.providerId,
+        provider: step.provider,
+        thinking: step.thinking,
+        effort: step.effort === '-' ? null : step.effort,
+      },
+    };
+    while (Date.now() - started < 15000) {
+      const health = await requestJson(port, '/__health');
+      if (healthMatches(health.body, matchCtx, step.model)) {
+        return { port, child, health: health.body };
+      }
+      await new Promise(r => setTimeout(r, 300));
+    }
+    lastError = stderr || `matrix-gateway health timeout port ${port} step=${step.raw}`;
+    try { child.kill(); } catch {}
+  }
+  throw new Error(lastError);
+}
+
+/**
+ * 跑一个最小 Claude 请求（仅触发 gateway 转发到 capture server）
+ * capture server 返回完整 SSE，Claude 接到 "ok" 后立即退出
+ */
+async function probeClaudeForStep(ctx, gateway, step, permissionMode) {
+  const ws = prepareWorkspace(ctx, `matrix-${step.index}`, 'claude-probe');
+  const prompt = `Reply exactly: PROBE_STEP_${step.index}_OK`;
+  const args = claudeArgs(ctx, step.model, prompt, permissionMode, false);
+  const env = claudeEnv(ctx, gateway.port);
+  return runCommand(ctx.options.claudeBin, args, { cwd: ws.dir, env, timeoutMs: 60000 });
+}
+
+/**
+ * 跑一个最小 Codex 请求（触发 gateway 把 Responses 翻译成 Chat Completions 发到 capture server）
+ */
+async function probeCodexForStep(ctx, gateway, step) {
+  const ws = prepareWorkspace(ctx, `matrix-${step.index}`, 'codex-probe');
+  await initGit(ws.dir);
+  const outputFile = path.join(ctx.dirs.logs, `codex-probe-${step.index}.txt`);
+  const prompt = `Reply exactly: CODEX_PROBE_STEP_${step.index}_OK`;
+  const args = codexArgs(ctx, gateway, step.model, ws.dir, outputFile, prompt, false);
+  const env = { ...baseEnv(ctx.dirs.codexHome), CODEX_HOME: ctx.dirs.codexHome };
+  return runCommand(ctx.options.codexBin, args, { cwd: ws.dir, env, timeoutMs: 60000 });
+}
+
+/**
+ * PRD-007 SEQUENCE 矩阵主流程
+ *
+ * @param {object} ctx - runner context
+ * @param {object} apiKeyMap - { providerId: apiKey } 当前 active provider 有真 key，其他用 dummy
+ * @param {object} preflightInfo
+ * @param {Function} redact
+ * @param {Array<{id, desc, seq, probe, stateLeak}>} matrixCases - 若提供则跑完整矩阵；否则用 ctx.options.sequence 单条
+ */
+async function runSequenceMatrix(ctx, apiKeyMap, preflightInfo, redact, matrixCases) {
+  console.log(`[matrix] 启动 capture server...`);
+  const captureServer = await startCaptureServer(ctx);
+  console.log(`[matrix] capture server ready on :${captureServer.port}, dir=${captureServer.dir}`);
+  ctx.captureServer = { port: captureServer.port, dir: captureServer.dir, jsonl: captureServer.jsonl };
+
+  // 把 case 转成 { caseId, probe, stateLeak, steps[] } 数组，runner 内部逐 case 跑
+  const caseList = matrixCases && matrixCases.length
+    ? matrixCases.map(c => ({ ...c, steps: parseSequence(c.seq) }))
+    : [{ id: 'CUSTOM', desc: 'CLIENT_E2E_SEQUENCE', seq: ctx.options.sequence, probe: 'claude', steps: parseSequence(ctx.options.sequence) }];
+
+  let gateway = null;
+  try {
+    for (const c of caseList) {
+      console.log(`[matrix] === ${c.id} | ${c.desc} (probe=${c.probe || 'claude'}${c.stateLeak ? ' / state-leak' : ''}) ===`);
+
+      for (const step of c.steps) {
+        const stepName = `${c.id}.step-${step.index}-${step.raw.replace(/[^a-z0-9.-]+/gi, '_')}`;
+        console.log(`[matrix] ▶ ${stepName} (${step.providerId}:${step.model}:${step.thinking}:${step.effort})`);
+
+        await captureSetStep(captureServer, stepName);
+
+        if (gateway) await stopGateway(gateway);
+        gateway = await startMatrixGateway(ctx, step, apiKeyMap, captureServer);
+
+        // 决定跑哪些 probe
+        const probes = [];
+        if (c.probe === 'claude' || c.probe === 'both' || !c.probe) probes.push('claude');
+        if (c.probe === 'codex' || c.probe === 'both') probes.push('codex');
+
+        const probeResults = [];
+        for (const probe of probes) {
+          let result;
+          if (probe === 'claude') {
+            result = await probeClaudeForStep(ctx, gateway, step, preflightInfo.claudePermissionMode);
+          } else {
+            result = await probeCodexForStep(ctx, gateway, step);
+          }
+          probeResults.push({ probe, code: result.code, durationMs: result.durationMs, stdout: result.stdout, stderr: result.stderr });
+        }
+
+        const probeOk = probeResults.every(r => r.code === 0);
+
+        // 断言时按 case 推断 hasReasoningContent / hasToolCall
+        // codex probe 不带 tool call，但 capture server mock 的 SSE 会让 gateway 走 chat path，
+        // 这一步只验"该发的发了 / 不该发的不发"，不验证 tool_stream（PRD §2 US-40 说 capture
+        // 永远返回相同响应，不模拟错误）。要测 tool_stream 注入要靠真实 codex-tool case（X-9）。
+        const runConfig = {
+          thinking: step.thinking,
+          effort: step.effort,
+          hasReasoningContent: false,
+          hasToolCall: false,
+        };
+        const assertResult = capabilityAsserts.assertCapture(captureServer.jsonl, stepName, step.provider, runConfig);
+
+        const stepCase = {
+          name: stepName,
+          caseId: c.id,
+          caseDesc: c.desc,
+          model: step.model,
+          provider: step.providerId,
+          probe: probes.join('+'),
+          stateLeak: !!c.stateLeak,
+          status: probeOk && assertResult.passed ? 'PASS' : 'FAIL',
+          durationMs: probeResults.reduce((s, r) => s + (r.durationMs || 0), 0),
+          captureEntries: assertResult.entries,
+          violations: assertResult.violations,
+          probeResults: probeResults.map(r => ({ probe: r.probe, code: r.code, durationMs: r.durationMs, stdout: redact(tail(r.stdout, 200)), stderr: redact(tail(r.stderr, 200)) })),
+          errorType: probeOk
+            ? (assertResult.passed ? '' : 'capability-violations')
+            : 'probe-failed',
+        };
+        ctx.cases.push(stepCase);
+        const vSummary = assertResult.violations.length
+          ? assertResult.violations.slice(0, 3).map(v => `${v.rule}:${v.field}`).join(',')
+          : '';
+        console.log(`[matrix]   ${stepCase.status}  probes=${probes.join('+')} capture-entries=${assertResult.entries} violations=${assertResult.violations.length}${vSummary ? ' [' + vSummary + ']' : ''}`);
+      }
+    }
+  } finally {
+    if (gateway) await stopGateway(gateway);
+    await stopCaptureServer(captureServer);
+  }
 }
 
 function prepareWorkspace(ctx, model, kind) {
@@ -683,12 +1127,15 @@ function blockingConfigChanges(ctx) {
 
 function markdownReport(ctx) {
   const summary = reportSummary(ctx);
+  const isMatrix = !!ctx.matrixMode;
+  const title = isMatrix ? `Client E2E Switching Matrix Report (PRD-007)` : 'Client E2E Report';
   const lines = [
-    '# Client E2E Report',
+    `# ${title}`,
     '',
     `- Status: ${summary.status}`,
     `- Run ID: ${ctx.runId}`,
     `- Started: ${ctx.startedAt}`,
+    `- Mode: ${isMatrix ? `matrix=${ctx.matrixMode}` : 'happy-path'}`,
     `- Provider: ${ctx.options.providerId}`,
     `- Models: ${ctx.options.models.join(', ')}`,
     `- Targets: ${ctx.options.targets.join(', ') || '(none)'}`,
@@ -696,12 +1143,50 @@ function markdownReport(ctx) {
     `- Codex CLI: ${ctx.toolVersions.codex || '(not required)'}`,
     `- Temp root: ${ctx.options.keepTmp ? ctx.dirs.root : '(removed)'}`,
     '',
-    '| Model | Case | Status | Duration | Error |',
-    '|-------|------|--------|----------|-------|',
   ];
-  for (const item of ctx.cases) {
-    lines.push(`| ${item.model} | ${item.name} | ${item.status} | ${item.durationMs || 0}ms | ${item.errorType || item.reason || ''} |`);
+
+  if (isMatrix) {
+    // 按 case 分组聚合
+    const byCase = new Map();
+    for (const item of ctx.cases) {
+      const key = item.caseId || item.name;
+      if (!byCase.has(key)) byCase.set(key, { caseId: key, desc: item.caseDesc || '', stateLeak: item.stateLeak, steps: [] });
+      byCase.get(key).steps.push(item);
+    }
+    lines.push('| Case | Desc | Steps | PASS / FAIL | Violations |');
+    lines.push('|------|------|-------|-------------|------------|');
+    for (const c of byCase.values()) {
+      const pass = c.steps.filter(s => s.status === 'PASS').length;
+      const fail = c.steps.filter(s => s.status === 'FAIL').length;
+      const totalViolations = c.steps.reduce((s, x) => s + (x.violations?.length || 0), 0);
+      const tag = c.stateLeak ? ' 🛰️' : '';
+      lines.push(`| ${c.caseId}${tag} | ${c.desc} | ${c.steps.length} | ${pass} / ${fail} | ${totalViolations} |`);
+    }
+    lines.push('', '## Step Detail（每步独立 capture 断言）', '');
+    lines.push('| Case | Step | Provider:Model:Thinking:Effort | Probe | Status | Captures | Violations |');
+    lines.push('|------|------|---------------------------------|-------|--------|----------|------------|');
+    for (const item of ctx.cases) {
+      const vSummary = (item.violations || []).slice(0, 3).map(v => `${v.rule}:${v.field}`).join('<br>') || '-';
+      lines.push(`| ${item.caseId || ''} | ${item.name.split('.').slice(1).join('.') || item.name} | ${item.provider}:${item.model}:${ctx.matrixMode ? '' : ''} | ${item.probe || ''} | ${item.status} | ${item.captureEntries || 0} | ${vSummary} |`);
+    }
+    if (ctx.cases.some(c => (c.violations || []).length)) {
+      lines.push('', '## Violations 详情', '');
+      for (const c of ctx.cases) {
+        if (!(c.violations || []).length) continue;
+        lines.push(`### ${c.name}`);
+        for (const v of c.violations) {
+          lines.push(`- **${v.rule}** \`${v.field}\` — ${v.reason}${v.expected !== undefined ? ` (expected: \`${JSON.stringify(v.expected)}\`)` : ''}${v.actual !== undefined ? ` (actual: \`${JSON.stringify(v.actual)}\`)` : ''}`);
+        }
+      }
+    }
+  } else {
+    lines.push('| Model | Case | Status | Duration | Error |');
+    lines.push('|-------|------|--------|----------|-------|');
+    for (const item of ctx.cases) {
+      lines.push(`| ${item.model} | ${item.name} | ${item.status} | ${item.durationMs || 0}ms | ${item.errorType || item.reason || ''} |`);
+    }
   }
+
   lines.push('', '## Safety Checks', '');
   lines.push(`- User config changes: ${ctx.configChanges.length ? ctx.configChanges.join(', ') : 'none'}`);
   lines.push(`- Blocking config changes: ${summary.blockingConfigChanges.length ? summary.blockingConfigChanges.join(', ') : 'none'}`);
@@ -747,10 +1232,14 @@ function writeReports(ctx, redact) {
   const md = redact(markdownReport(ctx));
 
   // 1) 默认 latest 报告落到项目目录，不会随 tmp 一起被删——满足 PRD 1.5"自动生成报告"。
+  //    PRD-007: matrix 模式走 V0.6 路径，跟 PRD-006 happy path 互不污染
+  const isMatrix = !!ctx.matrixMode;
+  const reportDir = isMatrix ? MATRIX_REPORT_DIR : DEFAULT_REPORT_DIR;
+  const basename = isMatrix ? MATRIX_REPORT_BASENAME : DEFAULT_REPORT_BASENAME;
   try {
-    fs.mkdirSync(DEFAULT_REPORT_DIR, { recursive: true });
-    fs.writeFileSync(path.join(DEFAULT_REPORT_DIR, `${DEFAULT_REPORT_BASENAME}.md`), md);
-    fs.writeFileSync(path.join(DEFAULT_REPORT_DIR, `${DEFAULT_REPORT_BASENAME}.json`), json);
+    fs.mkdirSync(reportDir, { recursive: true });
+    fs.writeFileSync(path.join(reportDir, `${basename}.md`), md);
+    fs.writeFileSync(path.join(reportDir, `${basename}.json`), json);
   } catch (err) {
     console.error(`[client-e2e] 默认报告写入失败: ${err.message}`);
   }
@@ -790,8 +1279,16 @@ async function main() {
   const ctx = makeContext(options, source);
   ctx.toolVersions = preflightInfo.versions;
   try {
-    for (const model of options.models) {
-      await runModel(ctx, model, apiKey, preflightInfo, redact);
+    // PRD-007 SEQUENCE / MATRIX 切换矩阵入口
+    if (options.matrix || options.sequence) {
+      const apiKeyMap = { [options.providerId]: apiKey };
+      const matrixCases = options.matrix ? expandMatrix(options.matrix) : null;
+      ctx.matrixMode = options.matrix || 'sequence';
+      await runSequenceMatrix(ctx, apiKeyMap, preflightInfo, redact, matrixCases);
+    } else {
+      for (const model of options.models) {
+        await runModel(ctx, model, apiKey, preflightInfo, redact);
+      }
     }
     redactGatewayConfig(ctx);
     ctx.configChanges = diffSnapshots(before, snapshotUserConfigs());

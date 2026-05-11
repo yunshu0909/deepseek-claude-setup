@@ -11,10 +11,12 @@
 
 const deepseek = require('./deepseek');
 const zai = require('./zai');
+const kimi = require('./kimi');
 
 const PROVIDERS = {
   [deepseek.id]: deepseek,
   [zai.id]: zai,
+  [kimi.id]: kimi,
 };
 
 /**
