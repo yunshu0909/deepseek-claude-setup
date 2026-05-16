@@ -146,5 +146,25 @@ check('ADP-7: makeGatewayRequest does not pre-lower / pre-inject provider fields
   }
 });
 
+// ADP-8：Kimi K2.6 reasoning/reasoning_content 双字段兼容（PRD-008 US-44 强制要求）
+const kimi = require('../proxy/providers/kimi');
+check('ADP-8: kimi tolerates K2.6 `reasoning` field as reasoning (dual-field)', () => {
+  // K2.6 只给 reasoning
+  assert.deepStrictEqual(
+    kimi.parseChatStreamChunk({ choices: [{ delta: { reasoning: 'k26-think' } }] }),
+    [{ kind: 'reasoning', text: 'k26-think' }]);
+  // K2.5 给 reasoning_content（不受影响）
+  assert.deepStrictEqual(
+    kimi.parseChatStreamChunk({ choices: [{ delta: { reasoning_content: 'k25-think' } }] }),
+    [{ kind: 'reasoning', text: 'k25-think' }]);
+  // 两者都在时以 reasoning_content 为准（不重复）
+  const evs = kimi.parseChatStreamChunk({ choices: [{ delta: { reasoning: 'x', reasoning_content: 'y' } }] });
+  assert.deepStrictEqual(evs, [{ kind: 'reasoning', text: 'y' }]);
+  // 不污染基座：deepseek 不认 reasoning 字段
+  assert.deepStrictEqual(
+    require('../proxy/providers/deepseek').parseChatStreamChunk({ choices: [{ delta: { reasoning: 'z' } }] }),
+    []);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
