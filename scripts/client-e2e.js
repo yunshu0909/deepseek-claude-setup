@@ -9,6 +9,7 @@
  *
  * @module scripts/client-e2e
  */
+require('./lib/load-env'); // 先加载仓库根 .env（不覆盖已 export 的环境变量）
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -1215,9 +1216,13 @@ function scanForSecret(root, secret) {
   if (!secret || secret.length < 12) return [];
   const hits = [];
   const skip = new Set(['.git', 'node_modules']);
+  // .env / .env.* 是 .gitignore 的有意本地密钥库（永不进 git）——
+  // 与 ~/.claude.json 同理，标它"泄漏"是误报。仍照常扫报告/tracked 文件。
+  const isGitignoredEnv = name => name === '.env' || name.startsWith('.env.');
   function walk(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (skip.has(entry.name)) continue;
+      if (entry.isFile() && isGitignoredEnv(entry.name)) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
       if (entry.isFile()) {

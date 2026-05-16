@@ -16,6 +16,8 @@
  * @module proxy/providers/kimi
  */
 
+const gateway = require('../gateway');
+
 const DEFAULT_MODEL = 'kimi-k2';
 const DEFAULTS = {
   baseUrl: 'https://api.moonshot.cn/v1',
@@ -33,9 +35,10 @@ function normalizeConfig(config = {}) {
   };
 }
 
-module.exports = {
+module.exports = gateway.attachAdapter({
   id: 'kimi',
   displayName: 'Kimi (Moonshot)',
+  defaultModel: DEFAULT_MODEL,
   models: [
     { id: 'kimi-k2', label: 'kimi-k2（通用）' },
     { id: 'kimi-k2-think', label: 'kimi-k2-think（思考模式）' },
@@ -54,4 +57,4 @@ module.exports = {
     parallelToolCalls: true,
   },
   normalizeConfig,
-};
+});

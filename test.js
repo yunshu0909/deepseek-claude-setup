@@ -199,6 +199,11 @@ async function run() {
   check('writes and reads selected model/effort', () => {
     assert.deepStrictEqual(configStore.read(), cfg);
   });
+  check('KEY-4: real provider key lives in the gateway config (~/.deepseek-claude/config.json)', () => {
+    // 真 key 必须留在网关配置，网关转发上游要用；客户端那侧才是占位 token
+    assert.strictEqual(configStore.read().apiKey, cfg.apiKey);
+    assert.strictEqual(configStore.readNormalized().providers.deepseek.apiKey, cfg.apiKey);
+  });
   check('normalizes legacy DeepSeek config into provider gateway shape', () => {
     const normalized = configStore.readNormalized();
     assert.strictEqual(normalized.activeProvider, 'deepseek');
@@ -330,8 +335,22 @@ async function run() {
     assert.strictEqual(patched.effortLevel, cfg.effort);
     assert.strictEqual(patched.alwaysThinkingEnabled, true);
   });
-  check('writes auth token from saved DeepSeek key', () => {
-    assert.strictEqual(patched.env.ANTHROPIC_AUTH_TOKEN, cfg.apiKey);
+  check('KEY-1: patch writes local placeholder token, never the real provider key', () => {
+    assert.notStrictEqual(patched.env.ANTHROPIC_AUTH_TOKEN, cfg.apiKey);
+    assert.strictEqual(patched.env.ANTHROPIC_AUTH_TOKEN, settingsPatcher.LOCAL_TOKEN);
+  });
+  check('KEY-3: re-patch over a settings.json that already held the real key replaces it with placeholder', () => {
+    // 模拟旧版本写过真 key 的历史 settings.json
+    const dirty = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    dirty.env.ANTHROPIC_AUTH_TOKEN = cfg.apiKey;
+    fs.writeFileSync(settingsPath, JSON.stringify(dirty, null, 2));
+    settingsPatcher.patch(cfg);
+    const repatched = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    assert.strictEqual(repatched.env.ANTHROPIC_AUTH_TOKEN, settingsPatcher.LOCAL_TOKEN);
+    assert.notStrictEqual(repatched.env.ANTHROPIC_AUTH_TOKEN, cfg.apiKey);
+  });
+  check('KEY-5a: patched settings.json contains no real provider key substring', () => {
+    assert.ok(!fs.readFileSync(settingsPath, 'utf-8').includes(cfg.apiKey));
   });
   settingsPatcher.patch({ ...cfg, model: 'deepseek-v4-pro', effort: 'max' });
   settingsPatcher.restore();
@@ -344,7 +363,13 @@ async function run() {
     assert.match(codexConfig, /\[profiles\.default\]/);
     assert.match(codexConfig, /model_provider = "deepseek_local"/);
     assert.match(codexConfig, new RegExp(`base_url = "http://127.0.0.1:${proxyPort}/v1"`));
-    assert.match(codexConfig, /experimental_bearer_token = "sk-test-key"/);
+  });
+  check('KEY-2: codex config writes placeholder token, never the real provider key', () => {
+    assert.doesNotMatch(codexConfig, new RegExp(`experimental_bearer_token = "${cfg.apiKey}"`));
+    assert.match(codexConfig, new RegExp(`experimental_bearer_token = "${codexPatcher.LOCAL_TOKEN}"`));
+  });
+  check('KEY-5b: patched codex config.toml contains no real provider key substring', () => {
+    assert.ok(!codexConfig.includes(cfg.apiKey));
   });
   check('writes top-level deepseek_local override so codex uses our proxy in login state', () => {
     // 关键：codex 0.128 在 ChatGPT 账号登录态下，顶层 model_provider 是路由决定性字段

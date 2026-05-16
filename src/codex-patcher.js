@@ -8,6 +8,8 @@ const CODEX_CONFIG_PATH = process.env.CODEX_CONFIG_PATH || path.join(CODEX_HOME,
 // 用 127.0.0.1 而不是 localhost：proxy 只 bind v4，部分系统 localhost 解析为 ::1 会连不上
 const PROXY_URL = process.env.DEEPSEEK_CLAUDE_PROXY_URL
   || (process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? `http://127.0.0.1:${process.env.DEEPSEEK_CLAUDE_PROXY_PORT}` : 'http://127.0.0.1:17861');
+// codex 也只与本机网关通信：写占位 token，真 key 只留 ~/.deepseek-claude/config.json
+const LOCAL_TOKEN = 'deepseek-claude-local';
 const START = '# >>> deepseek-claude-setup codex';
 const END = '# <<< deepseek-claude-setup codex';
 const ORIG_START = '# --- original default profile ---';
@@ -178,7 +180,7 @@ function managedBlock(config, original, topLevel) {
 name = "DeepSeek Local Proxy"
 base_url = "${PROXY_URL}/v1"
 wire_api = "responses"
-experimental_bearer_token = ${toTomlString(config.apiKey || 'sk-placeholder')}
+experimental_bearer_token = ${toTomlString(LOCAL_TOKEN)}
 request_max_retries = 0
 stream_max_retries = 0
 stream_idle_timeout_ms = 600000
@@ -288,4 +290,4 @@ function isPatched() {
   return /\[profiles\.default\]/.test(content) && /model_provider\s*=\s*"deepseek_local"/.test(content);
 }
 
-module.exports = { patch, restore, isPatched, CODEX_CONFIG_PATH, PROXY_URL };
+module.exports = { patch, restore, isPatched, CODEX_CONFIG_PATH, PROXY_URL, LOCAL_TOKEN };

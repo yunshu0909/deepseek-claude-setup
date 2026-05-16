@@ -9,6 +9,8 @@
  * @module proxy/providers/deepseek
  */
 
+const gateway = require('../gateway');
+
 const DEFAULT_MODEL = 'deepseek-v4-pro';
 const DEFAULTS = {
   baseUrl: 'https://api.deepseek.com',
@@ -31,9 +33,10 @@ function normalizeConfig(config = {}) {
   };
 }
 
-module.exports = {
+module.exports = gateway.attachAdapter({
   id: 'deepseek',
   displayName: 'DeepSeek',
+  defaultModel: DEFAULT_MODEL,
   models: [
     { id: 'deepseek-v4-pro', label: 'deepseek-v4-pro' },
     { id: 'deepseek-v4-flash', label: 'deepseek-v4-flash' },
@@ -50,4 +53,4 @@ module.exports = {
     parallelToolCalls: true,
   },
   normalizeConfig,
-};
+});

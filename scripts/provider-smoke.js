@@ -9,6 +9,7 @@
  *
  * @module scripts/provider-smoke
  */
+require('./lib/load-env'); // 先加载仓库根 .env（不覆盖已 export 的环境变量）
 const fs = require('fs');
 const http = require('http');
 const os = require('os');

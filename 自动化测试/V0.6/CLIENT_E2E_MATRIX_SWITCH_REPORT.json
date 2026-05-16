@@ -1,0 +1,1531 @@
+{
+  "runId": "1778918253987-51341",
+  "startedAt": "2026-05-16T07:57:33.988Z",
+  "options": {
+    "providerId": "zai",
+    "provider": {
+      "id": "zai",
+      "displayName": "智谱 BigModel",
+      "defaultModel": "glm-5.1",
+      "models": [
+        {
+          "id": "glm-5.1",
+          "label": "glm-5.1（旗舰，强制思考）",
+          "hint": "推荐"
+        },
+        {
+          "id": "glm-5",
+          "label": "glm-5（长程任务）",
+          "hint": "Agentic"
+        },
+        {
+          "id": "glm-5-turbo",
+          "label": "glm-5-turbo（快速均衡）",
+          "hint": "Turbo"
+        },
+        {
+          "id": "glm-4.7",
+          "label": "glm-4.7（代码/工具调用）",
+          "hint": "Stable"
+        }
+      ],
+      "defaults": {
+        "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+        "chatPath": "/chat/completions",
+        "anthropicBaseUrl": "https://open.bigmodel.cn/api/anthropic"
+      },
+      "capabilities": {
+        "claudeCode": "anthropic_forward",
+        "codex": "chat_bridge",
+        "openaiChat": true,
+        "openaiResponses": false,
+        "thinking": true,
+        "thinkingEffort": false,
+        "anthropicThinking": false,
+        "chatStreamOptions": false,
+        "preservedThinking": "clear_thinking",
+        "toolStreamParam": "tool_stream",
+        "reasoningStream": "native",
+        "toolCallStreaming": true,
+        "parallelToolCalls": true
+      }
+    },
+    "models": [
+      "glm-5.1"
+    ],
+    "targets": [
+      "claude-text",
+      "claude-tool",
+      "codex-tool"
+    ],
+    "thinking": "enabled",
+    "effort": "high",
+    "keepTmp": false,
+    "reportPath": "",
+    "claudeBin": "claude",
+    "codexBin": "codex",
+    "longTimeoutMs": 900000,
+    "retry": false,
+    "sequence": "",
+    "matrix": "switch",
+    "captureUpstream": true
+  },
+  "apiKeySource": "ZHIPU_API_KEY",
+  "dirs": {
+    "root": "/var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-1778918253987-51341-FrqOkI",
+    "gatewayConfig": "/var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-1778918253987-51341-FrqOkI/gateway-config",
+    "logs": "/var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-1778918253987-51341-FrqOkI/logs",
+    "workspaces": "/var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-1778918253987-51341-FrqOkI/workspaces",
+    "codexHome": "/var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-1778918253987-51341-FrqOkI/codex-home",
+    "claudeHome": "/var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-1778918253987-51341-FrqOkI/claude-home"
+  },
+  "logPath": "/var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-1778918253987-51341-FrqOkI/logs/gateway.log",
+  "cases": [
+    {
+      "name": "DS-M1.step-1-ds_pro_on_max",
+      "caseId": "DS-M1",
+      "caseDesc": "model v4-pro → v4-flash",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2245,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 196,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2049,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-M1.step-2-ds_flash_on_max",
+      "caseId": "DS-M1",
+      "caseDesc": "model v4-pro → v4-flash",
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1967,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 163,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1804,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-M2.step-1-ds_flash_on_max",
+      "caseId": "DS-M2",
+      "caseDesc": "model v4-flash → v4-pro",
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1994,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 168,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1826,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-M2.step-2-ds_pro_on_max",
+      "caseId": "DS-M2",
+      "caseDesc": "model v4-flash → v4-pro",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2769,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 184,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2585,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-T1.step-1-ds_pro_on_max",
+      "caseId": "DS-T1",
+      "caseDesc": "thinking on → off",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2275,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 186,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2089,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-T1.step-2-ds_pro_off_max",
+      "caseId": "DS-T1",
+      "caseDesc": "thinking on → off",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1978,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 183,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1795,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-T2.step-1-ds_pro_off_max",
+      "caseId": "DS-T2",
+      "caseDesc": "thinking off → on",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 3084,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 192,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2892,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-T2.step-2-ds_pro_on_max",
+      "caseId": "DS-T2",
+      "caseDesc": "thinking off → on",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2525,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 181,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2344,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-E1.step-1-ds_pro_on_high",
+      "caseId": "DS-E1",
+      "caseDesc": "effort high → max",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1819,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 171,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1648,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-E1.step-2-ds_pro_on_max",
+      "caseId": "DS-E1",
+      "caseDesc": "effort high → max",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1946,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 168,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1778,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-E2.step-1-ds_pro_on_max",
+      "caseId": "DS-E2",
+      "caseDesc": "effort max → high",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2103,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 192,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1911,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "DS-E2.step-2-ds_pro_on_high",
+      "caseId": "DS-E2",
+      "caseDesc": "effort max → high",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2042,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 184,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1858,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-M1.step-1-zai_5.1_on_-",
+      "caseId": "ZAI-M1",
+      "caseDesc": "model glm-5.1 → glm-5",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1629,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 173,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1456,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-M1.step-2-zai_5_on_-",
+      "caseId": "ZAI-M1",
+      "caseDesc": "model glm-5.1 → glm-5",
+      "model": "glm-5",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2115,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 179,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1936,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-M2.step-1-zai_5_on_-",
+      "caseId": "ZAI-M2",
+      "caseDesc": "model glm-5 → glm-5-turbo",
+      "model": "glm-5",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1986,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 197,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1789,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-M2.step-2-zai_5-turbo_on_-",
+      "caseId": "ZAI-M2",
+      "caseDesc": "model glm-5 → glm-5-turbo",
+      "model": "glm-5-turbo",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2048,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 168,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1880,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-M3.step-1-zai_5-turbo_on_-",
+      "caseId": "ZAI-M3",
+      "caseDesc": "model glm-5-turbo → glm-4.7",
+      "model": "glm-5-turbo",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2583,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 164,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2419,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-M3.step-2-zai_4.7_on_-",
+      "caseId": "ZAI-M3",
+      "caseDesc": "model glm-5-turbo → glm-4.7",
+      "model": "glm-4.7",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2357,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 165,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2192,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-M4.step-1-zai_4.7_on_-",
+      "caseId": "ZAI-M4",
+      "caseDesc": "model glm-4.7 → glm-5.1",
+      "model": "glm-4.7",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2642,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 584,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2058,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-M4.step-2-zai_5.1_on_-",
+      "caseId": "ZAI-M4",
+      "caseDesc": "model glm-4.7 → glm-5.1",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2468,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 200,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2268,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-T1.step-1-zai_5.1_on_-",
+      "caseId": "ZAI-T1",
+      "caseDesc": "thinking on → off",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1645,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 157,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1488,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-T1.step-2-zai_5.1_off_-",
+      "caseId": "ZAI-T1",
+      "caseDesc": "thinking on → off",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1954,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 154,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1800,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-T2.step-1-zai_5.1_off_-",
+      "caseId": "ZAI-T2",
+      "caseDesc": "thinking off → on",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2066,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 167,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1899,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-T2.step-2-zai_5.1_on_-",
+      "caseId": "ZAI-T2",
+      "caseDesc": "thinking off → on",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1688,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 144,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1544,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-E1.step-1-zai_5.1_on_high",
+      "caseId": "ZAI-E1",
+      "caseDesc": "effort 切换应被忽略",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2066,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 190,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1876,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "ZAI-E1.step-2-zai_5.1_on_max",
+      "caseId": "ZAI-E1",
+      "caseDesc": "effort 切换应被忽略",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2760,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 151,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2609,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-1.step-1-ds_pro_on_max",
+      "caseId": "X-1",
+      "caseDesc": "cross DS → zai",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2969,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 175,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2794,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-1.step-2-zai_5.1_on_-",
+      "caseId": "X-1",
+      "caseDesc": "cross DS → zai",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1699,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 167,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1532,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-2.step-1-zai_5.1_on_-",
+      "caseId": "X-2",
+      "caseDesc": "cross zai → DS",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1979,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 162,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1817,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-2.step-2-ds_pro_on_max",
+      "caseId": "X-2",
+      "caseDesc": "cross zai → DS",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 3054,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 170,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2884,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-3.step-1-ds_flash_on_high",
+      "caseId": "X-3",
+      "caseDesc": "DS→zai→DS 配置保留",
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2004,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 155,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1849,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-3.step-2-zai_5.1_on_-",
+      "caseId": "X-3",
+      "caseDesc": "DS→zai→DS 配置保留",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1994,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 161,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1833,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-3.step-3-ds_flash_on_high",
+      "caseId": "X-3",
+      "caseDesc": "DS→zai→DS 配置保留",
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2468,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 171,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2297,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-4.step-1-zai_5.1_on_-",
+      "caseId": "X-4",
+      "caseDesc": "state leak zai → DS",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": true,
+      "stateLeakProbeRun": null,
+      "status": "PASS",
+      "durationMs": 2401,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 161,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2240,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-4.step-2-ds_pro_on_max",
+      "caseId": "X-4",
+      "caseDesc": "state leak zai → DS",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": true,
+      "stateLeakProbeRun": true,
+      "status": "PASS",
+      "durationMs": 2275,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 165,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2110,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-5.step-1-ds_pro_on_max",
+      "caseId": "X-5",
+      "caseDesc": "state leak DS → zai",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": true,
+      "stateLeakProbeRun": null,
+      "status": "PASS",
+      "durationMs": 2255,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 155,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2100,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-5.step-2-zai_5.1_on_-",
+      "caseId": "X-5",
+      "caseDesc": "state leak DS → zai",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": true,
+      "stateLeakProbeRun": true,
+      "status": "PASS",
+      "durationMs": 1818,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 158,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1660,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-6.step-1-zai_5.1_off_-",
+      "caseId": "X-6",
+      "caseDesc": "zai→DS→zai 配置保留",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2336,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 161,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2175,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-6.step-2-ds_pro_on_max",
+      "caseId": "X-6",
+      "caseDesc": "zai→DS→zai 配置保留",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 3264,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 174,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 3090,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-6.step-3-zai_5.1_off_-",
+      "caseId": "X-6",
+      "caseDesc": "zai→DS→zai 配置保留",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2040,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 153,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1887,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-7.step-1-ds_pro_on_max",
+      "caseId": "X-7",
+      "caseDesc": "跨切同时改 thinking",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1855,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 190,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1665,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-7.step-2-zai_5.1_off_-",
+      "caseId": "X-7",
+      "caseDesc": "跨切同时改 thinking",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude+codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1994,
+      "captureEntries": 2,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 158,
+          "stdout": "ok\n",
+          "stderr": ""
+        },
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1836,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-8.step-1-ds_pro_on_max",
+      "caseId": "X-8",
+      "caseDesc": "5 步循环切换",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 160,
+      "captureEntries": 1,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 160,
+          "stdout": "ok\n",
+          "stderr": ""
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-8.step-2-zai_5.1_on_-",
+      "caseId": "X-8",
+      "caseDesc": "5 步循环切换",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "claude",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 160,
+      "captureEntries": 1,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 160,
+          "stdout": "ok\n",
+          "stderr": ""
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-8.step-3-ds_flash_on_high",
+      "caseId": "X-8",
+      "caseDesc": "5 步循环切换",
+      "model": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "probe": "claude",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 166,
+      "captureEntries": 1,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 166,
+          "stdout": "ok\n",
+          "stderr": ""
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-8.step-4-zai_5-turbo_off_-",
+      "caseId": "X-8",
+      "caseDesc": "5 步循环切换",
+      "model": "glm-5-turbo",
+      "provider": "zai",
+      "probe": "claude",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 170,
+      "captureEntries": 1,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 170,
+          "stdout": "ok\n",
+          "stderr": ""
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-8.step-5-ds_pro_on_max",
+      "caseId": "X-8",
+      "caseDesc": "5 步循环切换",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "claude",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 156,
+      "captureEntries": 1,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "claude",
+          "code": 0,
+          "durationMs": 156,
+          "stdout": "ok\n",
+          "stderr": ""
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-9.step-1-ds_pro_on_max",
+      "caseId": "X-9",
+      "caseDesc": "跨切 + 工具调用",
+      "model": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "probe": "codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 1807,
+      "captureEntries": 1,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 1807,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    },
+    {
+      "name": "X-9.step-2-zai_5.1_on_-",
+      "caseId": "X-9",
+      "caseDesc": "跨切 + 工具调用",
+      "model": "glm-5.1",
+      "provider": "zai",
+      "probe": "codex",
+      "stateLeak": false,
+      "status": "PASS",
+      "durationMs": 2043,
+      "captureEntries": 1,
+      "violations": [],
+      "probeResults": [
+        {
+          "probe": "codex",
+          "code": 0,
+          "durationMs": 2043,
+          "stdout": ":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ok\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+          "stderr": "Reading additional input from stdin...\n"
+        }
+      ],
+      "errorType": ""
+    }
+  ],
+  "models": [],
+  "cleanup": "ok",
+  "configChanges": [],
+  "secretScan": [],
+  "toolVersions": {
+    "claude": "2.1.143 (Claude Code)",
+    "codex": "codex-cli 0.131.0-alpha.9"
+  },
+  "matrixMode": "switch",
+  "captureServer": {
+    "port": 24489,
+    "dir": "/var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-1778918253987-51341-FrqOkI/capture",
+    "jsonl": "/var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-1778918253987-51341-FrqOkI/capture/requests.jsonl"
+  },
+  "summary": {
+    "status": "PASS",
+    "passed": 49,
+    "failed": 0,
+    "skipped": 0,
+    "blockingConfigChanges": []
+  }
+}

@@ -9,6 +9,8 @@
  * @module proxy/providers/zai
  */
 
+const gateway = require('../gateway');
+
 const DEFAULT_MODEL = 'glm-5.1';
 const DEFAULTS = {
   baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
@@ -31,9 +33,10 @@ function normalizeConfig(config = {}) {
   };
 }
 
-module.exports = {
+module.exports = gateway.attachAdapter({
   id: 'zai',
   displayName: '智谱 BigModel',
+  defaultModel: DEFAULT_MODEL,
   models: [
     { id: 'glm-5.1', label: 'glm-5.1（旗舰，强制思考）', hint: '推荐' },
     { id: 'glm-5', label: 'glm-5（长程任务）', hint: 'Agentic' },
@@ -57,4 +60,4 @@ module.exports = {
     parallelToolCalls: true,
   },
   normalizeConfig,
-};
+});
