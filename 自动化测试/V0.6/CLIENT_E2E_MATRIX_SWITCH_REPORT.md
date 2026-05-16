@@ -1,5 +1,13 @@
 # Client E2E Switching Matrix Report (PRD-007)
 
+> ⚠️ **capture 模式产物，非真实 API**：本矩阵 gateway 上游被覆写为本机
+> capture-server（假上游），**0 字节真实 DeepSeek/智谱 流量、token 全 0、
+> DS 用 dummy key**。仅证明字段注入/路由/切换/state-leak 在字段路由层不回归，
+> **不证明 provider 真实可用**。真实 API 可用性见
+> `../V0.5/CLIENT_E2E_{DEEPSEEK,ZAI}_DEFAULT_REPORT.md`（EVD-2 真 happy-path）。
+> 另：zai 行的正向断言（clear_thinking/tool_stream）因 runConfig 写死未触发，
+> zai 行 ≈ 仅 mustNotHave，勿当"zai 真断言通过"（PRD-007 遗留，v0.7 修）。
+
 - Status: PASS
 - Run ID: 1778918253987-51341
 - Started: 2026-05-16T07:57:33.988Z
