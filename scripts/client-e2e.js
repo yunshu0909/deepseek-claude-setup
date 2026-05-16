@@ -578,19 +578,25 @@ const MATRIX_CASES = {
     { id: 'X-9', desc: '跨切 + 工具调用', seq: 'ds:pro:on:max → zai:5.1:on:-', probe: 'codex' },
   ],
   // PRD-007 US-49 模板化复利验证：接 Kimi 作为新 provider 后矩阵自动展开。
-  // Kimi capabilities: thinking=true / thinkingEffort=false / anthropicThinking=false / claudeCode=null
-  // 因此只跑 codex probe（无 Anthropic 端点）+ 不发 reasoning_effort + 无 effort 切换。
+  // v0.7 PRD-008 US-44 据实修正后 Kimi caps：thinking=true / thinkingEffort=false /
+  // anthropicThinking=true / claudeCode='anthropic_forward'（v0.6 的 null 是错的）。
+  // 故 probe 改 'both'（Anthropic 端点真实存在）；模型 ID 用修正后的 k2.6/k2.5/thinking。
+  // 注意：Kimi capability 无 preservedThinking/toolStreamParam 且 thinkingEffort=false，
+  // capability-asserts 对 Kimi 推导出的 mustHave 近空 → 矩阵对 Kimi 仍偏同义反复
+  // （PRD-007 runConfig 写死遗留，§7.4 已诚实标注，v0.7 待修；真实可用以 happy-path 真测为准）。
   KIMI: [
-    { id: 'KIMI-M1', desc: 'model k2 → k2-think', seq: 'kimi:k2:on:- → kimi:k2-think:on:-', probe: 'codex' },
-    { id: 'KIMI-M2', desc: 'model k2-think → k2', seq: 'kimi:k2-think:on:- → kimi:k2:on:-', probe: 'codex' },
-    { id: 'KIMI-T1', desc: 'thinking on → off', seq: 'kimi:k2:on:- → kimi:k2:off:-', probe: 'codex' },
-    { id: 'KIMI-T2', desc: 'thinking off → on', seq: 'kimi:k2:off:- → kimi:k2:on:-', probe: 'codex' },
+    { id: 'KIMI-M1', desc: 'model k2.6 → k2.5', seq: 'kimi:k2.6:on:- → kimi:k2.5:on:-', probe: 'both' },
+    { id: 'KIMI-M2', desc: 'model k2.5 → k2-thinking', seq: 'kimi:k2.5:on:- → kimi:k2-thinking:on:-', probe: 'both' },
+    { id: 'KIMI-M3', desc: 'model k2-thinking → k2.6', seq: 'kimi:k2-thinking:on:- → kimi:k2.6:on:-', probe: 'both' },
+    { id: 'KIMI-T1', desc: 'thinking on → off', seq: 'kimi:k2.6:on:- → kimi:k2.6:off:-', probe: 'both' },
+    { id: 'KIMI-T2', desc: 'thinking off → on', seq: 'kimi:k2.6:off:- → kimi:k2.6:on:-', probe: 'both' },
+    { id: 'KIMI-E1', desc: 'effort 切换应被忽略', seq: 'kimi:k2.6:on:high → kimi:k2.6:on:max', probe: 'both' },
   ],
   CROSS_KIMI: [
-    { id: 'XK-1', desc: 'cross DS → kimi', seq: 'ds:pro:on:max → kimi:k2:on:-', probe: 'codex' },
-    { id: 'XK-2', desc: 'cross kimi → DS', seq: 'kimi:k2:on:- → ds:pro:on:max', probe: 'codex' },
-    { id: 'XK-3', desc: 'cross zai → kimi', seq: 'zai:5.1:on:- → kimi:k2:on:-', probe: 'codex' },
-    { id: 'XK-4', desc: 'cross kimi → zai', seq: 'kimi:k2:on:- → zai:5.1:on:-', probe: 'codex' },
+    { id: 'XK-1', desc: 'cross DS → kimi', seq: 'ds:pro:on:max → kimi:k2.6:on:-', probe: 'both' },
+    { id: 'XK-2', desc: 'cross kimi → DS', seq: 'kimi:k2.6:on:- → ds:pro:on:max', probe: 'both' },
+    { id: 'XK-3', desc: 'cross zai → kimi', seq: 'zai:5.1:on:- → kimi:k2.6:on:-', probe: 'both' },
+    { id: 'XK-4', desc: 'cross kimi → zai', seq: 'kimi:k2.6:on:- → zai:5.1:on:-', probe: 'both' },
   ],
 };
 
