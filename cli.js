@@ -8,6 +8,7 @@ const proxyManager = require('./src/proxy-manager');
 const autostart = require('./src/autostart');
 const settingsPatcher = require('./src/settings-patcher');
 const codexPatcher = require('./src/codex-patcher');
+const hermesPatcher = require('./src/hermes-patcher');
 const ui = require('./src/ui');
 const pkg = require('./package.json');
 
@@ -98,8 +99,11 @@ Usage:
   deepseek-claude-setup
 
 Options:
-  -h, --help      显示帮助
-  -v, --version   显示版本
+  --enable-hermes    非交互接管 Hermes Agent（适合服务器）
+  --disable-hermes   非交互还原 Hermes Agent
+  --diagnose-hermes  输出 Hermes 接管诊断 JSON
+  -h, --help         显示帮助
+  -v, --version      显示版本
 `;
 
 if (process.argv.includes('--help') || process.argv.includes('-h')) {
@@ -110,6 +114,31 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 if (process.argv.includes('--version') || process.argv.includes('-v')) {
   console.log(pkg.version);
   process.exit(0);
+}
+
+async function runHermesCommand(action) {
+  await checkForUpdate();
+
+  if (action === 'diagnose') {
+    const health = await proxyManager.getHealth();
+    const status = autostart.status ? autostart.status() : { installed: autostart.isInstalled?.() || false };
+    console.log(JSON.stringify(hermesPatcher.diagnose(health, status), null, 2));
+    return true;
+  }
+
+  const config = configStore.read();
+  if (!config && action === 'enable') {
+    throw new Error('还没有 DeepSeek 配置，请先运行一次交互向导保存 API Key / 模型配置');
+  }
+
+  if (action === 'enable') {
+    return ui.enableHermes(config, proxyManager, autostart, hermesPatcher);
+  }
+  if (action === 'disable') {
+    return ui.disableHermes(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
+  }
+
+  throw new Error(`未知 Hermes 命令: ${action}`);
 }
 
 async function main() {
@@ -123,10 +152,10 @@ async function main() {
     const newCfg = await ui.configWizard(null);
     if (!newCfg) return;  // 用户取消
     // 配置完直接进主面板
-    await ui.mainPanel(newCfg, proxyManager, autostart, settingsPatcher, codexPatcher);
+    await ui.mainPanel(newCfg, proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
   } else {
     // 已有配置 → 主面板
-    await ui.mainPanel(config, proxyManager, autostart, settingsPatcher, codexPatcher);
+    await ui.mainPanel(config, proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
   }
 }
 
@@ -140,7 +169,16 @@ function exitCleanly(code = 0) {
 
 process.on('SIGINT', () => exitCleanly(130));
 
-main().then(() => {
+const hermesAction = process.argv.includes('--enable-hermes')
+  ? 'enable'
+  : process.argv.includes('--disable-hermes')
+    ? 'disable'
+    : process.argv.includes('--diagnose-hermes')
+      ? 'diagnose'
+      : null;
+
+(hermesAction ? runHermesCommand(hermesAction) : main()).then(ok => {
+  if (ok === false) return exitCleanly(1);
   exitCleanly(0);
 }).catch(err => {
   console.error('错误:', err.message);

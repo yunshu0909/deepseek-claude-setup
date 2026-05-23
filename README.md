@@ -1,6 +1,6 @@
 # DeepSeek × Claude Code / Codex 一键配置工具
 
-让 Claude Code 和 OpenAI Codex CLI 透明使用 DeepSeek 模型，且**思考模式真的生效**。
+让 Claude Code、OpenAI Codex CLI 和 Hermes Agent 透明使用 DeepSeek 模型，且**思考模式真的生效**。
 
 ---
 
@@ -32,24 +32,26 @@ npx -y github:yunshu0909/deepseek-claude-setup
 
 ---
 
-## 主面板 4 个独立开关
+## 主面板 5 个独立入口
 
 ```
 Claude Code: ○ 未接入 / 🟢 已接入
 Codex:       ○ 未接入 / 🟢 已接入 (直接 codex 即可使用)
+Hermes:      ○ 可接管 / 🟢 已接管
 代理:        ○ 未运行 / 🟢 127.0.0.1:17861
 模型: deepseek-v4-pro  |  思考模式: 开启 (max)
 
 🤖 开启/关闭 Claude Code 接入       — 改 ~/.claude/settings.json
 ⌘ 开启/关闭 Codex 接入              — 改 ~/.codex/config.toml 默认 profile
+◇ 开启/关闭 Hermes Agent 接管       — 改 ~/.hermes/config.yaml 或 /var/lib/hermes/config.yaml
 🧠 开启/关闭思考模式                 — 切换 thinking.type 与 effort
 ⚙ 修改配置                          — API Key / 模型 / 思考强度
 ✕ 退出
 ```
 
-**两个接入完全独立**——可以只让 Claude Code 走 DeepSeek 而 Codex 保留 OpenAI，反之亦然。
+**三个接入完全独立**——可以只让 Claude Code、Codex 或 Hermes 其中一个走 DeepSeek，其他客户端保留原配置。
 
-代理进程**自动管理**：任一接入开启时代理自动启动 + 注册 LaunchAgent 开机自启；两个接入都关闭时代理自动停止。
+代理进程**自动管理**：任一接入开启时代理自动启动 + 注册开机自启；全部接入都关闭时代理自动停止。Linux 服务器优先注册 systemd service，非 systemd 环境会明确提示只能手动常驻。
 
 ---
 
@@ -184,6 +186,30 @@ model_reasoning_effort = "xhigh"
 ```bash
 codex                # 无需 -p，直接走 DeepSeek
 codex -p openai      # 临时切回 OpenAI
+```
+
+### Hermes Agent（开启 Hermes 接管时）
+
+优先改 `HERMES_CONFIG_PATH` 指定的文件；未指定时，服务器上优先使用 `/var/lib/hermes/config.yaml`，本机使用 `~/.hermes/config.yaml`。原始文件备份到同路径 `.deepseek-backup`。
+
+```yaml
+model:
+  provider: "custom"
+  default: "deepseek-v4-pro"
+  base_url: "http://127.0.0.1:17861/v1"
+  api_mode: "chat_completions"
+  api_key: "deepseek-claude-local"
+agent:
+  reasoning_effort: "high"
+```
+
+> Hermes 配置里不会写入真实 DeepSeek API Key；真实 key 只保存在 `~/.deepseek-claude/config.json`，由本地代理转发到 DeepSeek。
+
+服务器非交互接管：
+
+```bash
+npx -y github:yunshu0909/deepseek-claude-setup --enable-hermes
+npx -y github:yunshu0909/deepseek-claude-setup --diagnose-hermes
 ```
 
 ---
