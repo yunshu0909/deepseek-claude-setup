@@ -1,10 +1,10 @@
-# DeepSeek × Claude Code / Codex 一键配置工具
+# DeepSeek × Claude Code / Codex / Hermes 一键配置工具
 
 让 Claude Code、OpenAI Codex CLI 和 Hermes Agent 透明使用 DeepSeek 模型，且**思考模式真的生效**。
 
 ---
 
-## 解决两个真实痛点
+## 解决三个真实痛点
 
 ### 1. Claude Code 接 DeepSeek，思考强度无效
 
@@ -18,6 +18,12 @@ Codex 用的是 OpenAI Responses API（独立的 reasoning / message / function_
 
 **解法**：本地代理实现完整状态机翻译，逐字转发，零依赖。
 
+### 3. Hermes Agent 需要纳入统一模型配置
+
+Hermes Agent 默认有自己的模型配置和 provider key 管理。如果它直接连外部 provider，就会和 Claude Code / Codex 使用两套模型、两套思考强度和两套故障诊断路径，服务器上也不方便统一纳管。
+
+**解法**：本工具把 Hermes 的 `config.yaml` 切到本地 OpenAI Chat Completions 入口 `http://127.0.0.1:17861/v1`，真实 DeepSeek Key 仍只保存在本地代理配置里，Hermes 配置只写本地占位 token。
+
 ---
 
 ## 一行命令使用
@@ -28,7 +34,7 @@ npx -y github:yunshu0909/deepseek-claude-setup
 
 **首次运行**：拉到 GitHub 最新版，进配置向导（输入 DeepSeek API Key → 选模型 → 选思考模式 → 选思考深度），然后进主面板。
 
-**已经装过的用户**（v1.4.0+）：每次启动自动检测 GitHub 最新 release——发现新版本就自动清 `~/.npm/_npx` 缓存 + 重新 `npx` + 重启进程，**无需手动操作**。`proxy.js` 同样会被检测内容变化并热重启代理。
+**已经装过的用户**（v1.4.0+）：每次启动自动检测 GitHub `main` 最新 commit——发现新版本就自动清 `~/.npm/_npx` 缓存 + 重新 `npx` + 重启进程，**无需手动操作**。`proxy.js` 同样会被检测内容变化并热重启代理。
 
 ---
 
@@ -90,6 +96,19 @@ Hermes:      ○ 可接管 / 🟢 已接管
 │                                       ▼                         │
 │                              Codex CLI（看到独立思考 + 文本 +     │
 │                                         工具调用真流式）           │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│ Hermes Agent 路径（OpenAI Chat Completions 透传 + 字段覆盖）        │
+│                                                                 │
+│  Hermes Agent ─POST /v1/chat/completions──► 代理 127.0.0.1:17861 │
+│                                       │ 注入 model               │
+│                                       │ 注入 thinking.type       │
+│                                       │ 注入 reasoning_effort    │
+│                                       ▼                         │
+│                              api.deepseek.com/chat/completions  │
+│                                       ▼                         │
+│                                   Hermes Agent（无感）            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -209,6 +228,7 @@ agent:
 
 ```bash
 npx -y github:yunshu0909/deepseek-claude-setup --enable-hermes
+npx -y github:yunshu0909/deepseek-claude-setup --disable-hermes
 npx -y github:yunshu0909/deepseek-claude-setup --diagnose-hermes
 ```
 
@@ -236,6 +256,13 @@ RESPONSES_DONE id=resp_xxx effort=max thinking=Y(1296chars) text=694chars tools=
 MSG_DONE model=deepseek-v4-pro thinking=Y(982chars) text=240chars stream=true usage=120/240 4200ms
 ```
 
+**Hermes / OpenAI Chat Completions 路径**：
+
+```
+CHAT_POST /v1/chat/completions model=hermes-local->deepseek-v4-pro msgs=1 tools=0 thinking=enabled effort=max
+CHAT_DONE model=deepseek-v4-pro stream=false status=200 1750ms
+```
+
 判定标准：
 - `thinking=Y(N chars)` 且 N > 0 → DeepSeek 真启用了思考
 - `thinking=N` 而你设了开启 → 配置或上游 bug，请提 issue 附日志
@@ -250,9 +277,9 @@ MSG_DONE model=deepseek-v4-pro thinking=Y(982chars) text=240chars stream=true us
 npm test
 ```
 
-57 个自动化用例（v1.4.0 当前数）覆盖：配置存储、settings/codex 文件 patch/restore、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、跨平台 autostart 抽象（macOS launchd / Windows schtasks）。
+69 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd）。
 
-测试使用临时目录 + 本地假 DeepSeek 上游，**不调用真实 API，不修改真实 `~/.claude` / `~/.codex`**。
+测试使用临时目录 + 本地假 DeepSeek 上游，**不调用真实 API，不修改真实 `~/.claude` / `~/.codex` / Hermes 配置**。
 
 真实 codex CLI 长会话压测见 [自动化测试/codex实际测试/REPORT.md](自动化测试/codex实际测试/REPORT.md)（21 轮长会话 0 失败）。
 
@@ -262,10 +289,11 @@ npm test
 
 - **macOS**（开机自启走 launchd LaunchAgent）
 - **Windows 10/11**（开机自启走 schtasks `/SC ONLOGON`，失败时降级到 Startup 文件夹的 `.vbs`）
-- Linux 代理本身能跑，但开机自启静默 no-op（用户需自行配置 systemd unit）
+- Linux 代理本身能跑；systemd 环境会注册 `deepseek-claude-proxy.service`，非 systemd 环境会明确提示手动常驻命令
 - Node.js >= 16
 - Claude Code 已安装（仅 Claude Code 接入需要）
 - Codex CLI 已安装（仅 Codex 接入需要）
+- Hermes Agent 已安装且存在 `config.yaml`（仅 Hermes 接管需要）
 
 > 跨平台抽象在 `src/autostart/{darwin,win32,linux}.js`，调用方零 `process.platform` 分支（PRD-003 已交付，v1.3.x）。Mac 与 Windows UX 完全一致。
 
@@ -279,11 +307,11 @@ npm test
 npx -y github:yunshu0909/deepseek-claude-setup
 ```
 
-v1.4.0+ 启动时自动比对 GitHub 最新 release：发现新版本就自动 `rm -rf ~/.npm/_npx` 后重新 npx + 重启进程，**无需手动清缓存**。`proxy.js` 内容变化时主面板会热重启代理。
+v1.4.0+ 启动时自动比对 GitHub `main` 最新 commit：发现新版本就自动 `rm -rf ~/.npm/_npx` 后重新 npx + 重启进程，**无需手动清缓存**。`proxy.js` 内容变化时主面板会热重启代理。
 
 ### 完全卸载
 
-工具里推荐先**关闭两个接入开关**（自动还原 settings.json / config.toml + 注销 LaunchAgent），再清残留：
+工具里推荐先**关闭所有接入开关**（自动还原 settings.json / config.toml / Hermes config.yaml + 注销自启项），再清残留：
 
 ```bash
 # macOS
@@ -298,9 +326,14 @@ schtasks /Delete /TN "DeepSeekClaudeProxy" /F 2>$null
 Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\deepseek-claude-proxy.vbs" -ErrorAction SilentlyContinue
 Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "*deepseek-claude*" } | Stop-Process -Force
 Remove-Item -Recurse -Force "$env:USERPROFILE\.deepseek-claude"
+
+# Linux systemd
+systemctl disable --now deepseek-claude-proxy.service 2>/dev/null
+rm -f /etc/systemd/system/deepseek-claude-proxy.service
+systemctl daemon-reload 2>/dev/null
 ```
 
-如果跳过了开关直接清文件，从 `.deepseek-backup` 备份手动还原 `~/.claude/settings.json` 和 `~/.codex/config.toml`。
+如果跳过了开关直接清文件，从 `.deepseek-backup` 备份手动还原 `~/.claude/settings.json`、`~/.codex/config.toml` 和 Hermes `config.yaml`。
 
 ---
 
@@ -308,12 +341,13 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\.deepseek-claude"
 
 已完成：
 
-- ✅ **跨平台适配（PRD-003，v1.3.x）** — `src/autostart/` 抽象 macOS launchd / Windows schtasks+Startup .vbs / Linux 静默 no-op，调用方零 `process.platform` 分支，Mac/Win UX 一致
-- ✅ **真·自更新（PRD-005，v1.4.0）** — cli.js 启动检测 GitHub 最新 release，发现新版自动清 `~/.npm/_npx` + 重新 npx + 重启进程（用 `DEEPSEEK_CLAUDE_SKIP_UPDATE` 环境变量防死循环）
+- ✅ **跨平台适配（PRD-003，v1.3.x）** — `src/autostart/` 抽象 macOS launchd / Windows schtasks+Startup .vbs / Linux systemd，调用方零 `process.platform` 分支
+- ✅ **真·自更新（v1.4.0）** — cli.js 启动检测 GitHub `main` 最新 commit，发现新版自动清 `~/.npm/_npx` + 重新 npx + 重启进程（用 `DEEPSEEK_CLAUDE_SKIP_UPDATE` 环境变量防死循环）
+- ✅ **Hermes Agent 接管（v1.4.1）** — 新增 `/v1/chat/completions` 入口、Hermes config patch/restore/status、Linux systemd、非交互 `--enable-hermes`，服务器真实 `hermes -z` smoke 通过
 
 下一步：
 
-- **多 provider 支持（PRD-004）** — 输入 API Key 一键接入 Qwen / Kimi / 智谱 / 阶跃 / MiniMax 等国产模型；引入 provider 抽象层与统一思考字段映射
+- **Provider Gateway 大版本** — 把已完成但未发布的 v0.5~v0.7（DeepSeek / 智谱 / Kimi 与切换矩阵）纳入 PRD-012 完整认证后再打包发布
 
 ---
 
