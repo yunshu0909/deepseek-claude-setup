@@ -632,6 +632,135 @@ function handleResponses(req, res, payload) {
   streamChatToResponses(res, body, streamMode);
 }
 
+function chatPassthroughFields(payload) {
+  const fields = [
+    'temperature', 'top_p', 'max_tokens', 'presence_penalty', 'frequency_penalty',
+    'stop', 'response_format', 'seed', 'n', 'logprobs', 'top_logprobs', 'user',
+    'parallel_tool_calls', 'tool_choice',
+  ];
+  const picked = {};
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(payload, field)) picked[field] = payload[field];
+  }
+  return picked;
+}
+
+/**
+ * 处理 OpenAI Chat Completions 透传：Hermes 等 OpenAI SDK 客户端走这条入口。
+ *
+ * @param {object} req - Node HTTP request
+ * @param {object} res - Node HTTP response
+ * @param {object} payload - OpenAI Chat Completions 请求体
+ * @returns {void}
+ */
+function handleChatCompletions(req, res, payload) {
+  const thinking = normalizeThinking(CONFIG.thinking || 'enabled');
+  const stream = payload.stream !== false;
+  const body = {
+    ...chatPassthroughFields(payload),
+    model: CONFIG.model || payload.model || 'deepseek-v4-pro',
+    messages: Array.isArray(payload.messages) ? payload.messages : [],
+    stream,
+    thinking: { type: thinking },
+  };
+  if (payload.tools) body.tools = payload.tools;
+  if (payload.tool_choice) body.tool_choice = payload.tool_choice;
+  if (stream && payload.stream_options) body.stream_options = payload.stream_options;
+  if (thinking === 'enabled') {
+    body.reasoning_effort = normalizeEffort(CONFIG.effort || 'max');
+  }
+
+  const headers = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (!['host', 'content-length', 'transfer-encoding', 'connection'].includes(key.toLowerCase())) {
+      headers[key] = value;
+    }
+  }
+  headers['Content-Type'] = 'application/json';
+  headers.authorization = `Bearer ${CONFIG.apiKey}`;
+
+  const client = TARGET_PROTOCOL === 'http:' ? http : https;
+  const started = Date.now();
+  let retriesLeft = 1;
+  let connected = false;
+
+  function canDowngradeToolEffort(requestBody) {
+    return requestBody.reasoning_effort === 'max'
+      && Array.isArray(requestBody.tools)
+      && requestBody.tools.length > 0;
+  }
+
+  function attempt(requestBody, allowEffortDowngrade) {
+    const bodyOut = JSON.stringify(requestBody);
+    const reqHeaders = {
+      ...headers,
+      'Content-Length': Buffer.byteLength(bodyOut),
+    };
+    const upstream = client.request({
+      hostname: TARGET_HOST,
+      port: TARGET_PORT,
+      path: `${OPENAI_TARGET_PATH_PREFIX}/chat/completions`,
+      method: 'POST',
+      headers: reqHeaders,
+      rejectUnauthorized: process.env.DEEPSEEK_CLAUDE_STRICT_TLS === '1',
+    }, upstreamRes => {
+      connected = true;
+      if (res.headersSent) return;
+      if (upstreamRes.statusCode >= 500 && allowEffortDowngrade && canDowngradeToolEffort(requestBody)) {
+        upstreamRes.resume();
+        upstreamRes.on('end', () => {
+          const downgraded = { ...requestBody, reasoning_effort: 'high' };
+          connected = false;
+          log(`CHAT_RETRY model=${requestBody.model} tools=${requestBody.tools.length} status=${upstreamRes.statusCode} effort=max->high`);
+          attempt(downgraded, false);
+        });
+        return;
+      }
+
+      res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+      upstreamRes.on('end', () => {
+        const elapsed = Date.now() - started;
+        const level = upstreamRes.statusCode >= 400 ? 'CHAT_FAILED' : 'CHAT_DONE';
+        log(`${level} model=${requestBody.model} stream=${requestBody.stream !== false} status=${upstreamRes.statusCode} ${elapsed}ms`);
+      });
+      upstreamRes.pipe(res);
+    });
+
+    upstream.setTimeout(300000, () => {
+      upstream.destroy();
+      if (!res.headersSent) {
+        log(`CHAT_FAILED model=${requestBody.model} stream=${requestBody.stream !== false} status=504 timeout`);
+        res.writeHead(504, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'upstream timeout' }));
+      }
+    });
+
+    upstream.on('error', err => {
+      const canRetry = !connected && !res.headersSent && retriesLeft > 0;
+      log(`CHAT_ERROR: ${err.message}${canRetry ? ' (retry in 500ms)' : ''}`);
+      if (canRetry) {
+        retriesLeft--;
+        setTimeout(() => attempt(requestBody, allowEffortDowngrade), 500);
+        return;
+      }
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+
+    upstream.write(bodyOut);
+    upstream.end();
+  }
+
+  log(
+    `CHAT_POST ${req.url} model=${payload.model || '?'}->${body.model} `
+    + `msgs=${body.messages.length} tools=${Array.isArray(body.tools) ? body.tools.length : 0} `
+    + `max_tokens=${body.max_tokens || '-'} thinking=${thinking} effort=${body.reasoning_effort || '-'}`
+  );
+  attempt(body, true);
+}
+
 let CONFIG;
 try {
   CONFIG = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
@@ -702,6 +831,10 @@ const server = http.createServer((req, res) => {
 
     if (req.url.startsWith('/v1/responses') || req.url.startsWith('/responses')) {
       return handleResponses(req, res, payload);
+    }
+
+    if (req.url.startsWith('/v1/chat/completions') || req.url.startsWith('/chat/completions')) {
+      return handleChatCompletions(req, res, payload);
     }
 
     // Anthropic Messages 路径透传（Claude Code 走这里）
