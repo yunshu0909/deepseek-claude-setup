@@ -19,12 +19,14 @@ const configDir = path.join(tmp, '.deepseek-claude');
 const hermesConfigPath = path.join(tmp, 'hermes-config.yaml');
 const proxyPort = 20500 + Math.floor(Math.random() * 1000);
 const systemdDir = path.join(tmp, 'systemd');
+const proxyLogPath = path.join(tmp, 'gateway.log');
 
 process.env.DEEPSEEK_CLAUDE_CONFIG_DIR = configDir;
 process.env.DEEPSEEK_CLAUDE_PROXY_PORT = String(proxyPort);
 process.env.HERMES_CONFIG_PATH = hermesConfigPath;
 process.env.DEEPSEEK_CLAUDE_SYSTEMD_SCOPE = 'system';
 process.env.DEEPSEEK_CLAUDE_SYSTEMD_SYSTEM_DIR = systemdDir;
+process.env.DEEPSEEK_CLAUDE_LOG_PATH = proxyLogPath;
 process.env.DEEPSEEK_CLAUDE_DISABLE_SYSTEMD = '1';
 
 const configStore = require('../src/config-store');
@@ -233,6 +235,7 @@ async function run() {
     assert.match(unit, /WantedBy=multi-user\.target/);
     assert.match(unit, /ExecStart="/);
     assert.match(unit, /DEEPSEEK_CLAUDE_CONFIG_DIR=/);
+    assert.match(unit, /DEEPSEEK_CLAUDE_LOG_PATH=/);
   });
   check('unsupported Linux environment returns explicit status', () => {
     assert.strictEqual(linuxAutostart.isSystemdAvailable(), false);

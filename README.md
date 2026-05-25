@@ -271,13 +271,37 @@ CHAT_DONE model=deepseek-v4-pro stream=false status=200 1750ms
 
 ---
 
+## 开发者认证（v1.5.0）
+
+v1.5.0 对普通用户的主面板和 npx 使用路径不做体验改版，主要新增开发者侧的 provider 自动化认证能力，用来判断 DeepSeek 后续回归和新模型接入是否真的可用。
+
+```bash
+npm run certify:provider -- --provider deepseek --dry-run
+env -u DEEPSEEK_API_KEY npm run certify:provider -- --provider deepseek
+DEEPSEEK_API_KEY=<key> npm run certify:provider -- --provider deepseek
+DEEPSEEK_API_KEY=<key> npm run certify:provider -- --provider deepseek --target hermes-linux
+npm run certify:release -- <mac-report> <windows-report> <linux-report>
+```
+
+认证器会生成 `reports/provider-certification/<run-id>/report.json` 和 `report.md`，并按 PRD-015 的 56 条用例记录 `PASS / FAIL / BLOCKED / SKIPPED`。`dry-run` 只表示计划生成成功，固定为 `planReady=true`、`passed=false`，不会冒充真实认证通过。
+
+当前认证范围包括：
+- DeepSeek health / Anthropic Messages / OpenAI Responses 基础连通
+- Claude Code 与 Codex 的模型切换、thinking 开关、effort、工具调用、命令执行、长任务
+- Hermes / Linux systemd 真场景 smoke
+- 报告上下文、dirty worktree、true-key 证据、Key 泄露扫描、缺平台/缺 P0/假绿防护
+
+Windows 报告可由 Windows 真机单独生成后人工合并；release gate 仍要求三平台报告来自同一目标分支和 commit。
+
+---
+
 ## 测试
 
 ```bash
 npm test
 ```
 
-69 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd）。
+111 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 v1.5.0 provider certification 的报告、release gate、capture runner、true-key runner 和 Linux Hermes runner。
 
 测试使用临时目录 + 本地假 DeepSeek 上游，**不调用真实 API，不修改真实 `~/.claude` / `~/.codex` / Hermes 配置**。
 
@@ -344,10 +368,11 @@ systemctl daemon-reload 2>/dev/null
 - ✅ **跨平台适配（PRD-003，v1.3.x）** — `src/autostart/` 抽象 macOS launchd / Windows schtasks+Startup .vbs / Linux systemd，调用方零 `process.platform` 分支
 - ✅ **真·自更新（v1.4.0）** — cli.js 启动检测 GitHub `main` 最新 commit，发现新版自动清 `~/.npm/_npx` + 重新 npx + 重启进程（用 `DEEPSEEK_CLAUDE_SKIP_UPDATE` 环境变量防死循环）
 - ✅ **Hermes Agent 接管（v1.4.1）** — 新增 `/v1/chat/completions` 入口、Hermes config patch/restore/status、Linux systemd、非交互 `--enable-hermes`，服务器真实 `hermes -z` smoke 通过
+- ✅ **Provider Certification Automation（v1.5.0）** — 新增 `certify:provider`、`certify:release`、`smoke:provider`、`e2e:clients`、`smoke:hermes-linux`，把 DeepSeek 作为基准 provider 建立可复用认证报告和三平台门禁
 
 下一步：
 
-- **Provider Gateway 大版本** — 把已完成但未发布的 v0.5~v0.7（DeepSeek / 智谱 / Kimi 与切换矩阵）纳入 PRD-012 完整认证后再打包发布
+- **逐家 provider 接入** — 用 v1.5.0 认证体系逐家接入并验证 ZAI / Kimi / Qwen / MiniMax / 豆包，避免一次性混发 Provider Gateway 大分支
 
 ---
 

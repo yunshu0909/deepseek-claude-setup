@@ -25,8 +25,8 @@ const TARGET_PROTOCOL = process.env.DEEPSEEK_CLAUDE_TARGET_PROTOCOL || 'https:';
 const PORT = process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? Number(process.env.DEEPSEEK_CLAUDE_PROXY_PORT) : 17861;
 const SERVICE_NAME = 'deepseek-claude-proxy';
 
-// 日志路径用 os.tmpdir() 跨平台（macOS: /var/folders/.../T/，Win: %TEMP%，Linux: /tmp/）
-const LOG_PATH = path.join(os.tmpdir(), 'deepseek-claude-proxy.log');
+// E2E 认证会给每次 run 注入独立日志，避免和用户常驻代理日志互相污染。
+const LOG_PATH = process.env.DEEPSEEK_CLAUDE_LOG_PATH || path.join(os.tmpdir(), 'deepseek-claude-proxy.log');
 
 function log(msg) {
   const ts = new Date().toISOString().slice(11, 19);
@@ -628,7 +628,7 @@ function handleResponses(req, res, payload) {
 
   const streamMode = payload.stream !== false ? 'stream' : 'json';
   const inputTypes = (payload.input || []).map(it => it.type + (it.role ? ':' + it.role : '')).join(',');
-  log(`RESPONSES stream=${streamMode} msgs=${body.messages.length} tools=${!!tools} thinking=${thinking} effort=${body.reasoning_effort || '-'} input=[${inputTypes}]`);
+  log(`RESPONSES stream=${streamMode} model=${body.model} msgs=${body.messages.length} tools=${!!tools} thinking=${thinking} effort=${body.reasoning_effort || '-'} input=[${inputTypes}]`);
   streamChatToResponses(res, body, streamMode);
 }
 

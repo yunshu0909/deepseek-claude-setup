@@ -1,0 +1,194 @@
+{
+  "providerId": "deepseek",
+  "mode": "true-key",
+  "runId": "1779706215672-b4e679",
+  "effort": "max",
+  "model": "deepseek-v4-pro",
+  "thinking": "enabled",
+  "status": "PASS",
+  "passed": true,
+  "startedAt": "2026-05-25T10:50:15.672Z",
+  "finishedAt": "2026-05-25T10:51:36.597Z",
+  "versions": {
+    "codex": "codex-cli 0.133.0-alpha.1"
+  },
+  "cases": [
+    {
+      "name": "codex-long",
+      "model": "deepseek-v4-pro",
+      "status": "PASS",
+      "evidenceType": "true-key",
+      "durationMs": 80034,
+      "positiveAssertions": 11,
+      "marker": "ALL TESTS PASS",
+      "gatewayHealth": {
+        "service": "deepseek-claude-proxy",
+        "ok": true,
+        "model": "deepseek-v4-pro",
+        "thinking": "enabled",
+        "effort": "max"
+      },
+      "gatewayEffortLogMatched": true,
+      "gatewayFieldsMatched": true,
+      "workspaceFiles": [
+        ".git",
+        "certification-blackbox.test.js",
+        "package.json",
+        "test.js",
+        "todo.js",
+        "todo.json"
+      ],
+      "workspaceSnapshot": [
+        {
+          "file": "certification-blackbox.test.js",
+          "bytes": 1373,
+          "sha256": "eb1cd106d80748e3a3b36102f24f76afa76a08ab7cae2063ee1fb8a5aa4e64eb",
+          "text": "const assert = require('assert');\nconst fs = require('fs');\nconst cp = require('child_process');\nfunction lines(text) { return text.trim().split(/\\r?\\n/).filter(Boolean); }\nfunction hasId(line, id) { return new RegExp(`(^|\\\\D)${id}(\\\\D|$)`).test(line); }\nfunction assertTodoLine(line, id, task, done) {\n  assert(line.includes(task), `missing task ${task}: ${line}`);\n  assert(hasId(line, id), `missing id ${id}: ${line}`);\n  const doneMarker = /\\[x\\]|✓|✔|✅/i.test(line);\n  const openMarker = /\\[\\s\\]|☐/i.test(line);\n  assert.strictEqual(doneMarker, done, `done marker mismatch: ${line}`);\n  if (!done) assert(openMarker, `missing open marker: ${line}`);\n}\ntry { fs.unlinkSync('todo.json'); } catch {}\ncp.execFileSync(process.execPath, ['todo.js', 'add', '写文档']);\ncp.execFileSync(process.execPath, ['todo.js', 'add', '修bug']);\nlet list = lines(cp.execFileSync(process.execPath, ['todo.js', 'list'], {encoding:'utf8'}));\nassert.strictEqual(list.length, 2);\nassertTodoLine(list[0], 1, '写文档', false);\nassertTodoLine(list[1], 2, '修bug', false);\ncp.execFileSync(process.execPath, ['todo.js', 'done', '1']);\nlist = lines(cp.execFileSync(process.execPath, ['todo.js', 'list'], {encoding:'utf8'}));\nassert.strictEqual(list.length, 2);\nassertTodoLine(list[0], 1, '写文档', true);\nassertTodoLine(list[1], 2, '修bug', false);\nconsole.log('ALL TESTS PASS');\n"
+        },
+        {
+          "file": "package.json",
+          "bytes": 58,
+          "sha256": "391a7d999f2affd1bb695c769317fb26b30db1b4235077125c60e6a9d9285beb",
+          "text": "{\n  \"name\": \"client-e2e-codex-long-1779706215672-b4e679\"\n}"
+        },
+        {
+          "file": "test.js",
+          "bytes": 1825,
+          "sha256": "b78da1d55015f301a5bacbf287854366be9701d408aa7fe9618672b24fb111c1",
+          "text": "const assert = require('assert');\nconst fs = require('fs');\nconst path = require('path');\nconst { execSync } = require('child_process');\n\nconst todoJs = path.join(__dirname, 'todo.js');\nconst todoJson = path.join(__dirname, 'todo.json');\n\n// Read todo.js source — verify exists & non‑empty\nconst todoJsContent = fs.readFileSync(todoJs, 'utf8');\nassert.ok(todoJsContent.length > 0, 'todo.js should not be empty');\n\n// Clean slate\ntry { fs.unlinkSync(todoJson); } catch (e) {}\n\n// Add two items\nexecSync('node \"' + todoJs + '\" add \"Buy milk\"');\nexecSync('node \"' + todoJs + '\" add \"Walk dog\"');\n\n// Read todo.json — verify two items in order\nlet data = JSON.parse(fs.readFileSync(todoJson, 'utf8'));\nassert.strictEqual(data.length, 2);\nassert.strictEqual(data[0].task, 'Buy milk');\nassert.strictEqual(data[0].done, false);\nassert.strictEqual(data[1].task, 'Walk dog');\nassert.strictEqual(data[1].done, false);\n\n// List — verify order (Buy milk before Walk dog)\nconst listOutput = execSync('node \"' + todoJs + '\" list').toString();\nassert.ok(listOutput.includes('Buy milk'));\nassert.ok(listOutput.includes('Walk dog'));\nassert.ok(\n  listOutput.indexOf('Buy milk') < listOutput.indexOf('Walk dog'),\n  'Buy milk should appear before Walk dog in list'\n);\n\n// Done the first item\nconst doneOutput = execSync('node \"' + todoJs + '\" done 1').toString();\nassert.ok(doneOutput.includes('Buy milk'));\n\n// Read todo.json again — verify done flag\ndata = JSON.parse(fs.readFileSync(todoJson, 'utf8'));\nassert.strictEqual(data[0].done, true);\nassert.strictEqual(data[1].done, false);\n\n// Read both files (explicitly re‑read to satisfy spec)\nassert.ok(fs.readFileSync(todoJs, 'utf8').length > 0, 'todo.js re‑read');\nassert.ok(fs.readFileSync(todoJson, 'utf8').length > 0, 'todo.json re‑read');\n\nconsole.log('ALL TESTS PASS');\n"
+        },
+        {
+          "file": "todo.js",
+          "bytes": 1522,
+          "sha256": "ce7fce9b4bccbedf5a3ae2e48e651a177b9762ef30fbc05b849d9b009f9d59b5",
+          "text": "#!/usr/bin/env node\nconst fs = require('fs');\nconst path = require('path');\n\nconst DATA_FILE = path.join(__dirname, 'todo.json');\n\nfunction readTodos() {\n  try {\n    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));\n  } catch {\n    return [];\n  }\n}\n\nfunction writeTodos(todos) {\n  fs.writeFileSync(DATA_FILE, JSON.stringify(todos, null, 2));\n}\n\nconst [,, command, ...args] = process.argv;\n\nswitch (command) {\n  case 'add': {\n    const task = args.join(' ');\n    if (!task) {\n      console.error('Usage: todo add <task>');\n      process.exit(1);\n    }\n    const todos = readTodos();\n    todos.push({ id: todos.length + 1, task, done: false });\n    writeTodos(todos);\n    console.log('Added: ' + task);\n    break;\n  }\n  case 'list': {\n    const todos = readTodos();\n    if (todos.length === 0) {\n      console.log('No todos yet.');\n    } else {\n      todos.forEach(function(t, i) {\n        console.log((i + 1) + '. [' + (t.done ? '✓' : ' ') + '] ' + t.task);\n      });\n    }\n    break;\n  }\n  case 'done': {\n    const index = parseInt(args[0], 10);\n    if (isNaN(index) || index < 1) {\n      console.error('Usage: todo done <index>');\n      process.exit(1);\n    }\n    const todos = readTodos();\n    if (index > todos.length) {\n      console.error('Invalid index');\n      process.exit(1);\n    }\n    todos[index - 1].done = true;\n    writeTodos(todos);\n    console.log('Marked as done: ' + todos[index - 1].task);\n    break;\n  }\n  default:\n    console.error('Usage: todo <add|list|done> [args]');\n    process.exit(1);\n}\n"
+        },
+        {
+          "file": "todo.json",
+          "bytes": 128,
+          "sha256": "e3a4580cee2e4f451c3f26bde0a1b206a8e9f2f2b9af431ba7da9200d449c08c",
+          "text": "[\n  {\n    \"id\": 1,\n    \"task\": \"写文档\",\n    \"done\": true\n  },\n  {\n    \"id\": 2,\n    \"task\": \"修bug\",\n    \"done\": false\n  }\n]"
+        }
+      ],
+      "stdout": "length > 0, 'todo.json re‑read');\\n\\nconsole.log('ALL TESTS PASS');\\nEOF\\\"\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}}\n{\"type\":\"item.updated\",\"item\":{\"id\":\"item_0\",\"type\":\"todo_list\",\"items\":[{\"text\":\"Create todo.js CLI with add/list/done\",\"completed\":true},{\"text\":\"Create test.js with Node assert\",\"completed\":true},{\"text\":\"Run node test.js and fix until pass\",\"completed\":false}]}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_5\",\"type\":\"agent_message\",\"text\":\"现在运行测试。\"}}\n{\"type\":\"item.started\",\"item\":{\"id\":\"item_6\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc 'cd /var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-real-I8MaxS/workspaces/codex-long && node test.js'\",\"aggregated_output\":\"\",\"exit_code\":null,\"status\":\"in_progress\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_6\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc 'cd /var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-real-I8MaxS/workspaces/codex-long && node test.js'\",\"aggregated_output\":\"ALL TESTS PASS\\n(node:48830) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\\n(Use `node --trace-warnings ...` to show where the warning was created)\\n\",\"exit_code\":0,\"status\":\"completed\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_7\",\"type\":\"agent_message\",\"text\":\"测试一次性通过！最后一行精确打印了 `ALL TESTS PASS`。\"}}\n{\"type\":\"item.updated\",\"item\":{\"id\":\"item_0\",\"type\":\"todo_list\",\"items\":[{\"text\":\"Create todo.js CLI with add/list/done\",\"completed\":true},{\"text\":\"Create test.js with Node assert\",\"completed\":true},{\"text\":\"Run node test.js and fix until pass\",\"completed\":true}]}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_8\",\"type\":\"agent_message\",\"text\":\"全部完成。以下是最终交付物：\\n\\n**`todo.js`** — CLI 待办工具\\n- `node todo.js add \\\"task\\\"` — 添加待办项\\n- `node todo.js list` — 列出所有待办（显示序号、完成状态、任务描述）\\n- `node todo.js done <n>` — 将第 n 条标记为已完成\\n- 数据持久化到当前目录的 `todo.json`\\n\\n**`test.js`** — 仅用 `assert`（Node 内置）的测试\\n- ✓ 读取 `todo.js` 验证非空\\n- ✓ add 两条：`Buy milk`、`Walk dog`\\n- ✓ list 验证顺序（milk 在 dog 之前）\\n- ✓ done 1 标记第一条为完成\\n- ✓ 读取 `todo.json` 验证完成状态\\n- ✓ 显式重读两个文件确认存在\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"todo_list\",\"items\":[{\"text\":\"Create todo.js CLI with add/list/done\",\"completed\":true},{\"text\":\"Create test.js with Node assert\",\"completed\":true},{\"text\":\"Run node test.js and fix until pass\",\"completed\":true}]}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":90235,\"cached_input_tokens\":0,\"output_tokens\":3706,\"reasoning_output_tokens\":0}}\n",
+      "stderr": "401 Unauthorized: {\"detail\":\"Unauthorized\"}\n\u001b[2m2026-05-25T10:50:21.741371Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mcodex_protocol::openai_models\u001b[0m\u001b[2m:\u001b[0m Model personality requested but model_messages is missing, falling back to base instructions. \u001b[3mmodel\u001b[0m\u001b[2m=\u001b[0mdeepseek-v4-pro \u001b[3mpersonality\u001b[0m\u001b[2m=\u001b[0mpragmatic\n\u001b[2m2026-05-25T10:50:26.037597Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mcodex_core_plugins::startup_remote_sync\u001b[0m\u001b[2m:\u001b[0m skipping startup remote plugin sync because curated marketplace is not ready \u001b[3mcodex_home\u001b[0m\u001b[2m=\u001b[0m/private/var/folders/kj/z3tflq9n7wb0h8s9w2v4bgt00000gn/T/deepseek-client-e2e-real-I8MaxS/codex-home\n\u001b[2m2026-05-25T10:50:55.836359Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mcodex_protocol::openai_models\u001b[0m\u001b[2m:\u001b[0m Model personality requested but model_messages is missing, falling back to base instructions. \u001b[3mmodel\u001b[0m\u001b[2m=\u001b[0mdeepseek-v4-pro \u001b[3mpersonality\u001b[0m\u001b[2m=\u001b[0mpragmatic\n\u001b[2m2026-05-25T10:50:58.541887Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mcodex_protocol::openai_models\u001b[0m\u001b[2m:\u001b[0m Model personality requested but model_messages is missing, falling back to base instructions. \u001b[3mmodel\u001b[0m\u001b[2m=\u001b[0mdeepseek-v4-pro \u001b[3mpersonality\u001b[0m\u001b[2m=\u001b[0mpragmatic\n\u001b[2m2026-05-25T10:51:08.816392Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mcodex_protocol::openai_models\u001b[0m\u001b[2m:\u001b[0m Model personality requested but model_messages is missing, falling back to base instructions. \u001b[3mmodel\u001b[0m\u001b[2m=\u001b[0mdeepseek-v4-pro \u001b[3mpersonality\u001b[0m\u001b[2m=\u001b[0mpragmatic\n\u001b[2m2026-05-25T10:51:11.503763Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mcodex_protocol::openai_models\u001b[0m\u001b[2m:\u001b[0m Model personality requested but model_messages is missing, falling back to base instructions. \u001b[3mmodel\u001b[0m\u001b[2m=\u001b[0mdeepseek-v4-pro \u001b[3mpersonality\u001b[0m\u001b[2m=\u001b[0mpragmatic\n\u001b[2m2026-05-25T10:51:14.413022Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mcodex_protocol::openai_models\u001b[0m\u001b[2m:\u001b[0m Model personality requested but model_messages is missing, falling back to base instructions. \u001b[3mmodel\u001b[0m\u001b[2m=\u001b[0mdeepseek-v4-pro \u001b[3mpersonality\u001b[0m\u001b[2m=\u001b[0mpragmatic\n\u001b[2m2026-05-25T10:51:17.537932Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mcodex_protocol::openai_models\u001b[0m\u001b[2m:\u001b[0m Model personality requested but model_messages is missing, falling back to base instructions. \u001b[3mmodel\u001b[0m\u001b[2m=\u001b[0mdeepseek-v4-pro \u001b[3mpersonality\u001b[0m\u001b[2m=\u001b[0mpragmatic\n\u001b[2m2026-05-25T10:51:22.266599Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mcodex_protocol::openai_models\u001b[0m\u001b[2m:\u001b[0m Model personality requested but model_messages is missing, falling back to base instructions. \u001b[3mmodel\u001b[0m\u001b[2m=\u001b[0mdeepseek-v4-pro \u001b[3mpersonality\u001b[0m\u001b[2m=\u001b[0mpragmatic\n",
+      "lastMessage": "全部完成。以下是最终交付物：\n\n**`todo.js`** — CLI 待办工具\n- `node todo.js add \"task\"` — 添加待办项\n- `node todo.js list` — 列出所有待办（显示序号、完成状态、任务描述）\n- `node todo.js done <n>` — 将第 n 条标记为已完成\n- 数据持久化到当前目录的 `todo.json`\n\n**`test.js`** — 仅用 `assert`（Node 内置）的测试\n- ✓ 读取 `todo.js` 验证非空\n- ✓ add 两条：`Buy milk`、`Walk dog`\n- ✓ list 验证顺序（milk 在 dog 之前）\n- ✓ done 1 标记第一条为完成\n- ✓ 读取 `todo.json` 验证完成状态\n- ✓ 显式重读两个文件确认存在",
+      "logSummary": "ge:user,message:user,reasoning,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output,reasoning,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output]\n[10:51:11] RESPONSES_DONE id=resp_1779706268818 effort=max thinking=Y(30chars) text=0chars tools=1 usage=12500/104 2682ms\n[10:51:11] RESPONSES_TOOLS count=5 names=[exec_command,write_stdin,update_plan,request_user_input,view_image]\n[10:51:11] RESPONSES stream=stream model=deepseek-v4-pro msgs=16 tools=true thinking=enabled effort=max input=[message:developer,message:user,message:user,reasoning,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output,reasoning,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output,reasoning,function_call,function_call_output]\n[10:51:14] RESPONSES_DONE id=resp_1779706271508 effort=max thinking=Y(25chars) text=7chars tools=1 usage=12618/108 2597ms\n[10:51:14] RESPONSES_TOOLS count=5 names=[exec_command,write_stdin,update_plan,request_user_input,view_image]\n[10:51:14] RESPONSES stream=stream model=deepseek-v4-pro msgs=19 tools=true thinking=enabled effort=max input=[message:developer,message:user,message:user,reasoning,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output,reasoning,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output,reasoning,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output]\n[10:51:17] RESPONSES_DONE id=resp_1779706274414 effort=max thinking=Y(203chars) text=35chars tools=1 usage=12832/157 3120ms\n[10:51:17] RESPONSES_TOOLS count=5 names=[exec_command,write_stdin,update_plan,request_user_input,view_image]\n[10:51:17] RESPONSES stream=stream model=deepseek-v4-pro msgs=22 tools=true thinking=enabled effort=max input=[message:developer,message:user,message:user,reasoning,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output,reasoning,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output,reasoning,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output,reasoning,message:assistant,function_call,function_call_output]\n[10:51:22] RESPONSES_DONE id=resp_1779706277540 effort=max thinking=Y(42chars) text=378chars tools=0 usage=13052/204 4726ms\n",
+      "modelSelfTest": {
+        "status": 0,
+        "code": 0,
+        "durationMs": 290,
+        "stdout": "ALL TESTS PASS\n",
+        "stderr": "(node:48947) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n",
+        "timedOut": false
+      },
+      "blackboxRetest": {
+        "status": 0,
+        "code": 0,
+        "durationMs": 314,
+        "stdout": "ALL TESTS PASS\n",
+        "stderr": "(node:48952) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.\n(Use `node --trace-warnings ...` to show where the warning was created)\n",
+        "timedOut": false
+      },
+      "staticChecks": {
+        "usesAssert": true,
+        "readsTodoJs": true,
+        "readsTodoJson": true
+      },
+      "toolRounds": 8,
+      "requiredFiles": true
+    }
+  ],
+  "gatewayHealth": {
+    "service": "deepseek-claude-proxy",
+    "ok": true,
+    "model": "deepseek-v4-pro",
+    "thinking": "enabled",
+    "effort": "max"
+  },
+  "expectedGatewayHealth": {
+    "model": "deepseek-v4-pro",
+    "thinking": "enabled",
+    "effort": "max"
+  },
+  "gatewayHealthPassed": true,
+  "positiveAssertions": 11,
+  "configSnapshots": {
+    "before": {
+      "~/.claude/settings.json": {
+        "exists": true,
+        "type": "file",
+        "sha256": "b194b1042c00b28a48294530a4c317c4b1df8fcaedbc3ed2508f07238abe699f"
+      },
+      "~/.claude/settings.json.deepseek-backup": {
+        "exists": false
+      },
+      "~/.codex/config.toml": {
+        "exists": true,
+        "type": "file",
+        "sha256": "628951476e97e706af0c8745793a0df2553b803298122488b0b17df2f6a9bde4"
+      },
+      "~/.codex/config.toml.deepseek-backup": {
+        "exists": true,
+        "type": "file",
+        "sha256": "5e906973bedb8a5181dc5f40fa2aac7938cf307a3a08abc234b6e8e5cf8b5c9b"
+      },
+      "~/.codex/auth.json": {
+        "exists": true,
+        "type": "file",
+        "sha256": "852d09b014757f791bf3e837a6adc7d04209799c6393854acc2b298a966603ab"
+      },
+      "~/.deepseek-claude/config.json": {
+        "exists": true,
+        "type": "file",
+        "sha256": "43c281c97a3f97a5a37f4380345f188ea9d770640340606f5f5306559f680910"
+      },
+      "~/.deepseek-claude/proxy.js": {
+        "exists": true,
+        "type": "file",
+        "sha256": "58975d81508afd83e93724607c5a679ca65092a4dfcc8dcf7b072331b389ae85"
+      }
+    },
+    "after": {
+      "~/.claude/settings.json": {
+        "exists": true,
+        "type": "file",
+        "sha256": "b194b1042c00b28a48294530a4c317c4b1df8fcaedbc3ed2508f07238abe699f"
+      },
+      "~/.claude/settings.json.deepseek-backup": {
+        "exists": false
+      },
+      "~/.codex/config.toml": {
+        "exists": true,
+        "type": "file",
+        "sha256": "628951476e97e706af0c8745793a0df2553b803298122488b0b17df2f6a9bde4"
+      },
+      "~/.codex/config.toml.deepseek-backup": {
+        "exists": true,
+        "type": "file",
+        "sha256": "5e906973bedb8a5181dc5f40fa2aac7938cf307a3a08abc234b6e8e5cf8b5c9b"
+      },
+      "~/.codex/auth.json": {
+        "exists": true,
+        "type": "file",
+        "sha256": "852d09b014757f791bf3e837a6adc7d04209799c6393854acc2b298a966603ab"
+      },
+      "~/.deepseek-claude/config.json": {
+        "exists": true,
+        "type": "file",
+        "sha256": "43c281c97a3f97a5a37f4380345f188ea9d770640340606f5f5306559f680910"
+      },
+      "~/.deepseek-claude/proxy.js": {
+        "exists": true,
+        "type": "file",
+        "sha256": "58975d81508afd83e93724607c5a679ca65092a4dfcc8dcf7b072331b389ae85"
+      }
+    }
+  },
+  "configChanges": [],
+  "secretScan": [],
+  "cleanup": {
+    "tmpRootRemoved": true,
+    "keptForDebug": false
+  }
+}

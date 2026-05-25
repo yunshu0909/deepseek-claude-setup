@@ -1,12 +1,17 @@
 {
   "name": "deepseek-claude-setup",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "一键配置 DeepSeek 模型与思考强度代理接入 Claude Code / Codex CLI",
   "bin": {
     "deepseek-claude-setup": "./cli.js"
   },
   "scripts": {
-    "test": "node test.js && node test/hermes-target.test.js"
+    "test": "node test.js && node test/hermes-target.test.js && node test/certification.test.js",
+    "smoke:provider": "node scripts/provider-smoke.js",
+    "e2e:clients": "node scripts/client-e2e.js",
+    "smoke:hermes-linux": "node scripts/certification/linux-hermes-smoke.js",
+    "certify:provider": "node scripts/certify-provider.js",
+    "certify:release": "node scripts/certification/release-gate.js"
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0"

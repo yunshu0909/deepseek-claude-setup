@@ -64,6 +64,9 @@ function buildServiceUnit() {
   if (process.env.DEEPSEEK_CLAUDE_PROXY_PORT) {
     env.push(`DEEPSEEK_CLAUDE_PROXY_PORT=${process.env.DEEPSEEK_CLAUDE_PROXY_PORT}`);
   }
+  if (process.env.DEEPSEEK_CLAUDE_LOG_PATH) {
+    env.push(`DEEPSEEK_CLAUDE_LOG_PATH=${process.env.DEEPSEEK_CLAUDE_LOG_PATH}`);
+  }
   const envLines = env.map(item => `Environment="${systemdQuote(item)}"`).join('\n');
   const wantedBy = scope() === 'system' ? 'multi-user.target' : 'default.target';
   return `[Unit]

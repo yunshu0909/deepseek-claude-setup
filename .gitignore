@@ -9,6 +9,7 @@ yarn-error.log*
 
 # Local runtime state
 .deepseek-claude/
+reports/provider-certification/
 .env
 .env.*
 
