@@ -130,7 +130,7 @@ function handleResponses(req, res, payload) {
 
   const streamMode = payload.stream !== false ? 'stream' : 'json';
   const inputTypes = (payload.input || []).map(it => it.type + (it.role ? ':' + it.role : '')).join(',');
-  log(`RESPONSES stream=${streamMode} msgs=${requestSpec.body.messages.length} tools=${!!tools} thinking=${thinking} effort=${requestSpec.body.reasoning_effort || '-'} input=[${inputTypes}]`);
+  log(`RESPONSES stream=${streamMode} model=${requestSpec.body.model} msgs=${requestSpec.body.messages.length} tools=${!!tools} thinking=${thinking} effort=${requestSpec.body.reasoning_effort || '-'} input=[${inputTypes}]`);
 
   codexResponses.streamChatToResponses(res, requestSpec, streamMode, {
     parseChunk: parsed => provider.parseChatStreamChunk(parsed),

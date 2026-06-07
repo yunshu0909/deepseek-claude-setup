@@ -4,12 +4,12 @@
 - Provider: deepseek
 - Mode: true-key
 - Model: deepseek-v4-pro
-- Started: 2026-05-25T10:50:15.672Z
-- Finished: 2026-05-25T10:51:36.597Z
+- Started: 2026-06-07T08:48:13.142Z
+- Finished: 2026-06-07T08:48:28.334Z
 
 | Case | Status | Assertions | Duration |
 |---|---|---:|---:|
-| codex-long | PASS | 11 | 80034ms |
+| codex-tool | PASS | 7 | 14887ms |
 
 - User config changes: none
 - Secret scan hits: 0
