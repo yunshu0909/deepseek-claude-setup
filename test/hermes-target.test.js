@@ -117,7 +117,7 @@ function makeChatUpstream(options = {}) {
 
 async function run() {
   fs.mkdirSync(configDir, { recursive: true });
-  fs.copyFileSync(path.join(__dirname, '..', 'proxy', 'proxy.js'), path.join(configDir, 'proxy.js'));
+  fs.cpSync(path.join(__dirname, '..', 'proxy'), configDir, { recursive: true });
 
   const cfg = {
     apiKey: 'sk-real-key-never-written-to-hermes',

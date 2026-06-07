@@ -173,7 +173,8 @@ async function run() {
   fs.mkdirSync(configDir, { recursive: true });
   fs.mkdirSync(claudeDir, { recursive: true });
   fs.mkdirSync(codexDir, { recursive: true });
-  fs.copyFileSync(path.join(__dirname, 'proxy', 'proxy.js'), path.join(configDir, 'proxy.js'));
+  // v1.6.0：proxy 是多文件 bundle（gateway/providers/clients/...），部署整个 proxy/ 目录而非单文件。
+  fs.cpSync(path.join(__dirname, 'proxy'), configDir, { recursive: true });
 
   const originalSettings = {
     env: {

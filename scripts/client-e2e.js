@@ -203,7 +203,7 @@ async function runTrueKeyClientAsUser(provider, options, context) {
 async function startProxy({ tmpRoot, port, config, capturePort, logPath }) {
   const configDir = path.join(tmpRoot, '.deepseek-claude');
   fs.mkdirSync(configDir, { recursive: true });
-  fs.copyFileSync(path.join(__dirname, '..', 'proxy', 'proxy.js'), path.join(configDir, 'proxy.js'));
+  fs.cpSync(path.join(__dirname, '..', 'proxy'), configDir, { recursive: true });
   fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify(config, null, 2));
   const env = {
     ...process.env,
