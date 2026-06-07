@@ -477,7 +477,10 @@ function redactFor(ctx, value) {
 }
 
 function expectedEffort(ctx) {
-  return ctx.thinking === 'disabled' ? 'off' : ctx.effort;
+  if (ctx.thinking === 'disabled') return 'off';
+  // 无 effort 档 provider（zai/kimi，thinkingEffort:false）：网关不发 reasoning_effort → 日志记 effort=-
+  if (ctx.effortTiers && ctx.effortTiers.length === 0) return '-';
+  return ctx.effort;
 }
 
 function gatewayFieldsMatch(ctx, log, client) {
@@ -845,6 +848,7 @@ async function runTrueKeyClient(options = {}) {
     longTimeoutMs: Number(process.env.CLIENT_E2E_LONG_TIMEOUT_MS || 900000),
     shortTimeoutMs: Number(process.env.CLIENT_E2E_SHORT_TIMEOUT_MS || 240000),
     effort,
+    effortTiers: provider.thinkingEfforts || [], // 空=无 effort 档（zai/kimi）→ gatewayFieldsMatch 期望 effort=-
     model,
     port: randomPort(),
     runId: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
