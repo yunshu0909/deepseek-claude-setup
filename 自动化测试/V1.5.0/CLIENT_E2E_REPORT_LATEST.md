@@ -1,15 +1,17 @@
 # Client E2E Report
 
 - Status: PASS
-- Provider: deepseek
+- Provider: zai
 - Mode: true-key
-- Model: deepseek-v4-pro
-- Started: 2026-06-07T09:37:54.831Z
-- Finished: 2026-06-07T09:39:51.205Z
+- Model: glm-5.1
+- Started: 2026-06-07T15:14:16.651Z
+- Finished: 2026-06-07T15:14:43.981Z
 
 | Case | Status | Assertions | Duration |
 |---|---|---:|---:|
-| claude-long | PASS | 9 | 115539ms |
+| claude-text | PASS | 4 | 4233ms |
+| claude-tool | PASS | 5 | 7797ms |
+| codex-tool | PASS | 7 | 14990ms |
 
 - User config changes: none
 - Secret scan hits: 0

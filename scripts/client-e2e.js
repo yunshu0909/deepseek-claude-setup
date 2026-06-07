@@ -414,10 +414,12 @@ function countLogEntries(text, marker) {
 }
 
 function expectedHealth(ctx) {
+  // 无 effort 档 provider（zai/kimi）或 thinking 关闭 → health 端点报告 effort=null
+  const noEffort = ctx.thinking === 'disabled' || (ctx.effortTiers && ctx.effortTiers.length === 0);
   return {
     model: ctx.model,
     thinking: ctx.thinking,
-    effort: ctx.thinking === 'disabled' ? null : ctx.effort,
+    effort: noEffort ? null : ctx.effort,
   };
 }
 
@@ -477,19 +479,19 @@ function redactFor(ctx, value) {
 }
 
 function expectedEffort(ctx) {
-  if (ctx.thinking === 'disabled') return 'off';
-  // 无 effort 档 provider（zai/kimi，thinkingEffort:false）：网关不发 reasoning_effort → 日志记 effort=-
-  if (ctx.effortTiers && ctx.effortTiers.length === 0) return '-';
-  return ctx.effort;
+  return ctx.thinking === 'disabled' ? 'off' : ctx.effort;
 }
 
 function gatewayFieldsMatch(ctx, log, client) {
   const modelPattern = client === 'claude'
     ? new RegExp(`model=[^\\s|]+->${ctx.model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
     : new RegExp(`model=${ctx.model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+  // 无 effort 档 provider（zai/kimi）或 thinking 关闭 → 网关无具体强度：claude 路径日志 effort=off，codex 路径 effort=-
+  const noEffort = ctx.thinking === 'disabled' || (ctx.effortTiers && ctx.effortTiers.length === 0);
+  const expectedEffortStr = noEffort ? (client === 'codex' ? '-' : 'off') : ctx.effort;
   return modelPattern.test(log)
     && log.includes(`thinking=${ctx.thinking}`)
-    && log.includes(`effort=${ctx.thinking === 'disabled' && client === 'codex' ? '-' : expectedEffort(ctx)}`);
+    && log.includes(`effort=${expectedEffortStr}`);
 }
 
 async function verifyCommandTask(workspaceDir, marker) {
@@ -619,7 +621,10 @@ async function runCodexTarget(ctx, target) {
   const result = await runCommand(ctx.bins.codex, codexArgs(ctx, ctx.model, ws.dir, outputFile, prompt, isLong), { cwd: ws.dir, env, timeoutMs: isLong ? ctx.longTimeoutMs : ctx.shortTimeoutMs });
   const lastMessage = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8') : '';
   const caseLog = logText(ctx, start);
-  const expectedLogEffort = ctx.thinking === 'disabled' ? 'undefined' : ctx.effort;
+  // 无 effort 档 provider（zai/kimi）：codex RESPONSES 日志记 effort=-（无 reasoning_effort）
+  const expectedLogEffort = ctx.thinking === 'disabled'
+    ? 'undefined'
+    : (ctx.effortTiers && ctx.effortTiers.length === 0 ? '-' : ctx.effort);
   const effortLogOk = caseLog.includes(`effort=${expectedLogEffort}`);
   const gatewayFieldsMatched = gatewayFieldsMatch(ctx, caseLog, 'codex');
   let assertions = Number(result.status === 0) + Number(caseLog.includes('RESPONSES_DONE')) + Number(!caseLog.includes('RESPONSES_FAILED')) + Number(ctx.gatewayHealthPassed) + Number(effortLogOk) + Number(gatewayFieldsMatched);
