@@ -215,8 +215,18 @@ async function run() {
     assert.strictEqual(patched.effortLevel, cfg.effort);
     assert.strictEqual(patched.alwaysThinkingEnabled, true);
   });
-  check('writes auth token from saved DeepSeek key', () => {
-    assert.strictEqual(patched.env.ANTHROPIC_AUTH_TOKEN, cfg.apiKey);
+  check('writes a local placeholder token, NOT the real provider key', () => {
+    assert.notStrictEqual(patched.env.ANTHROPIC_AUTH_TOKEN, cfg.apiKey);
+    assert.strictEqual(patched.env.ANTHROPIC_AUTH_TOKEN, settingsPatcher.LOCAL_TOKEN);
+  });
+  check('re-patching overwrites a previously leaked real key with the placeholder', () => {
+    const dirty = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    dirty.env.ANTHROPIC_AUTH_TOKEN = cfg.apiKey;
+    fs.writeFileSync(settingsPath, JSON.stringify(dirty, null, 2));
+    settingsPatcher.patch(cfg);
+    const repatched = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+    assert.strictEqual(repatched.env.ANTHROPIC_AUTH_TOKEN, settingsPatcher.LOCAL_TOKEN);
+    assert.ok(!fs.readFileSync(settingsPath, 'utf-8').includes(cfg.apiKey));
   });
   settingsPatcher.patch({ ...cfg, model: 'deepseek-v4-pro', effort: 'max' });
   settingsPatcher.restore();
@@ -229,7 +239,8 @@ async function run() {
     assert.match(codexConfig, /\[profiles\.default\]/);
     assert.match(codexConfig, /model_provider = "deepseek_local"/);
     assert.match(codexConfig, new RegExp(`base_url = "http://127.0.0.1:${proxyPort}/v1"`));
-    assert.match(codexConfig, /experimental_bearer_token = "sk-test-key"/);
+    assert.doesNotMatch(codexConfig, /experimental_bearer_token = "sk-test-key"/);
+    assert.match(codexConfig, new RegExp(`experimental_bearer_token = "${codexPatcher.LOCAL_TOKEN}"`));
   });
   check('writes top-level deepseek_local override so codex uses our proxy in login state', () => {
     // 关键：codex 0.128 在 ChatGPT 账号登录态下，顶层 model_provider 是路由决定性字段

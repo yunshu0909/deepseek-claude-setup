@@ -10,6 +10,9 @@ const PROXY_URL = process.env.DEEPSEEK_CLAUDE_PROXY_URL
   || (process.env.DEEPSEEK_CLAUDE_PROXY_PORT ? `http://127.0.0.1:${process.env.DEEPSEEK_CLAUDE_PROXY_PORT}` : 'http://127.0.0.1:17861');
 const DIRECT_URL = 'https://api.deepseek.com/anthropic';
 const FLASH_MODEL = 'deepseek-v4-flash';
+// 客户端只与本机网关 127.0.0.1 通信，不需要真 provider key：写本地占位 token。
+// 真 key 只存 ~/.deepseek-claude/config.json，网关转发上游时自行注入（PRD-005 US-22.5）。
+const LOCAL_TOKEN = 'deepseek-claude-local';
 const SAVED_CONFIG_PATH = path.join(process.env.DEEPSEEK_CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.deepseek-claude'), 'config.json');
 
 function read() {
@@ -75,9 +78,8 @@ function patch(config = {}) {
   const thinking = config.thinking === 'disabled' ? 'disabled' : 'enabled';
 
   s.env.ANTHROPIC_BASE_URL = PROXY_URL;
-  if (config.apiKey) {
-    s.env.ANTHROPIC_AUTH_TOKEN = config.apiKey;
-  }
+  // 指向本机网关：写占位 token，绝不把真 provider key 落进 settings.json
+  s.env.ANTHROPIC_AUTH_TOKEN = LOCAL_TOKEN;
   s.env.ANTHROPIC_MODEL = model;
   s.env.ANTHROPIC_DEFAULT_OPUS_MODEL = model;
   s.env.ANTHROPIC_DEFAULT_SONNET_MODEL = model;
@@ -102,4 +104,4 @@ function isPatched() {
   return s.env.ANTHROPIC_BASE_URL === PROXY_URL;
 }
 
-module.exports = { patch, restore, isPatched, SETTINGS_PATH, PROXY_URL, DIRECT_URL };
+module.exports = { patch, restore, isPatched, SETTINGS_PATH, PROXY_URL, DIRECT_URL, LOCAL_TOKEN };

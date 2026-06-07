@@ -13,6 +13,8 @@ const END = '# <<< deepseek-claude-setup codex';
 const ORIG_START = '# --- original default profile ---';
 const ORIG_END = '# --- end original ---';
 const TOP_LEVEL_KEYS = ['model', 'model_reasoning_effort', 'model_provider'];
+// 客户端只与本机网关通信，不需要真 provider key：写本地占位 token（真 key 只存 ~/.deepseek-claude/config.json）
+const LOCAL_TOKEN = 'deepseek-claude-local';
 
 function ensureDir() {
   fs.mkdirSync(path.dirname(CODEX_CONFIG_PATH), { recursive: true });
@@ -178,7 +180,7 @@ function managedBlock(config, original, topLevel) {
 name = "DeepSeek Local Proxy"
 base_url = "${PROXY_URL}/v1"
 wire_api = "responses"
-experimental_bearer_token = ${toTomlString(config.apiKey || 'sk-placeholder')}
+experimental_bearer_token = ${toTomlString(LOCAL_TOKEN)}
 request_max_retries = 0
 stream_max_retries = 0
 stream_idle_timeout_ms = 600000
@@ -288,4 +290,4 @@ function isPatched() {
   return /\[profiles\.default\]/.test(content) && /model_provider\s*=\s*"deepseek_local"/.test(content);
 }
 
-module.exports = { patch, restore, isPatched, CODEX_CONFIG_PATH, PROXY_URL };
+module.exports = { patch, restore, isPatched, CODEX_CONFIG_PATH, PROXY_URL, LOCAL_TOKEN };
