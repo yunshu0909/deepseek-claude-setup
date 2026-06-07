@@ -2,7 +2,7 @@
  * Provider Gateway 代理服务（server 核心）
  *
  * 负责：
- * - HTTP 入口分发：/__health、/v1/models、Anthropic Messages、Codex Responses
+ * - HTTP 入口分发：/__health、/v1/models、Anthropic Messages、Codex Responses、OpenAI Chat
  * - Anthropic Messages 透传 transport（含透明重试 + SSE 诊断嗅探）
  * - 维持常驻进程
  *
@@ -122,6 +122,137 @@ function handleResponses(req, res, payload) {
     parseChunk: parsed => provider.parseChatStreamChunk(parsed),
     log,
   });
+}
+
+function chatPassthroughFields(payload) {
+  const fields = [
+    'temperature', 'top_p', 'max_tokens', 'presence_penalty', 'frequency_penalty',
+    'stop', 'response_format', 'seed', 'n', 'logprobs', 'top_logprobs', 'user',
+    'parallel_tool_calls', 'tool_choice',
+  ];
+  const picked = {};
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(payload, field)) picked[field] = payload[field];
+  }
+  return picked;
+}
+
+/**
+ * 处理 OpenAI Chat Completions 透传：Hermes 等 OpenAI SDK 客户端走这条入口。
+ * @param {object} req - Node HTTP request
+ * @param {object} res - Node HTTP response
+ * @param {object} payload - OpenAI Chat Completions 请求体
+ * @returns {void}
+ */
+function handleChatCompletions(req, res, payload) {
+  const thinking = resolvedThinking();
+  const provider = activeProviderDefinition();
+  const gatewayRequest = gateway.makeGatewayRequest({
+    model: resolvedModel(payload.model),
+    messages: Array.isArray(payload.messages) ? payload.messages : [],
+    tools: payload.tools,
+    thinking,
+    effort: resolvedEffort(),
+    stream: payload.stream !== false,
+  });
+  const requestSpec = provider.buildChatRequestSpec(gatewayRequest, activeProviderConfig());
+  requestSpec.body = {
+    ...requestSpec.body,
+    ...chatPassthroughFields(payload),
+    model: gatewayRequest.model,
+    messages: gatewayRequest.conversation.messages,
+    stream: payload.stream !== false,
+  };
+  if (payload.tools) requestSpec.body.tools = payload.tools;
+  if (payload.tool_choice) requestSpec.body.tool_choice = payload.tool_choice;
+
+  const target = requestSpec.target;
+  const baseHeaders = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (!['host', 'content-length', 'transfer-encoding', 'connection'].includes(key.toLowerCase())) {
+      baseHeaders[key] = value;
+    }
+  }
+  baseHeaders['Content-Type'] = 'application/json';
+  baseHeaders.authorization = `Bearer ${requestSpec.apiKey}`;
+
+  const client = target.protocol === 'http:' ? http : https;
+  const started = Date.now();
+  let retriesLeft = 1;
+  let connected = false;
+
+  function canDowngradeToolEffort(body) {
+    return body.reasoning_effort === 'max' && Array.isArray(body.tools) && body.tools.length > 0;
+  }
+
+  function attempt(body, allowEffortDowngrade) {
+    const bodyOut = JSON.stringify(body);
+    const headers = {
+      ...baseHeaders,
+      'Content-Length': Buffer.byteLength(bodyOut),
+    };
+    const upstream = client.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.path,
+      method: 'POST',
+      headers,
+      rejectUnauthorized: process.env.DEEPSEEK_CLAUDE_STRICT_TLS === '1',
+    }, upstreamRes => {
+      connected = true;
+      if (res.headersSent) return;
+      if (upstreamRes.statusCode >= 500 && allowEffortDowngrade && canDowngradeToolEffort(body)) {
+        upstreamRes.resume();
+        upstreamRes.on('end', () => {
+          const downgraded = { ...body, reasoning_effort: 'high' };
+          connected = false;
+          log(`CHAT_RETRY model=${body.model} tools=${body.tools.length} status=${upstreamRes.statusCode} effort=max->high`);
+          attempt(downgraded, false);
+        });
+        return;
+      }
+      res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+      upstreamRes.on('end', () => {
+        const elapsed = Date.now() - started;
+        const level = upstreamRes.statusCode >= 400 ? 'CHAT_FAILED' : 'CHAT_DONE';
+        log(`${level} model=${body.model} stream=${body.stream !== false} status=${upstreamRes.statusCode} ${elapsed}ms`);
+      });
+      upstreamRes.pipe(res);
+    });
+
+    upstream.setTimeout(300000, () => {
+      upstream.destroy();
+      if (!res.headersSent) {
+        log(`CHAT_FAILED model=${body.model} stream=${body.stream !== false} status=504 timeout`);
+        res.writeHead(504, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'upstream timeout' }));
+      }
+    });
+
+    upstream.on('error', err => {
+      const canRetry = !connected && !res.headersSent && retriesLeft > 0;
+      log(`CHAT_ERROR: ${err.message}${canRetry ? ' (retry in 500ms)' : ''}`);
+      if (canRetry) {
+        retriesLeft--;
+        setTimeout(attempt, 500);
+        return;
+      }
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+
+    upstream.write(bodyOut);
+    upstream.end();
+  }
+
+  log(
+    `CHAT_POST ${req.url} model=${payload.model || '?'}->${requestSpec.body.model} `
+    + `msgs=${requestSpec.body.messages.length} tools=${Array.isArray(requestSpec.body.tools) ? requestSpec.body.tools.length : 0} `
+    + `max_tokens=${requestSpec.body.max_tokens || '-'} thinking=${thinking} effort=${requestSpec.body.reasoning_effort || '-'}`
+  );
+  attempt(requestSpec.body, true);
 }
 
 /**
@@ -333,6 +464,9 @@ const server = http.createServer((req, res) => {
 
     if (req.url.startsWith('/v1/responses') || req.url.startsWith('/responses')) {
       return handleResponses(req, res, payload);
+    }
+    if (req.url.startsWith('/v1/chat/completions') || req.url.startsWith('/chat/completions')) {
+      return handleChatCompletions(req, res, payload);
     }
     return handleAnthropic(req, res, payload);
   });

@@ -3,7 +3,7 @@
  *
  * 负责：
  * - 引导用户配置 provider、模型、API Key 与思考模式
- * - 接入/关闭 Claude Code 与 Codex 的本地代理配置
+ * - 接入/关闭 Claude Code、Codex 与 Hermes Agent 的本地代理配置
  * - 启动时同步代理文件包与旧版 Codex 配置
  *
  * @module ui
@@ -237,15 +237,21 @@ function deployProxyScript() {
 async function ensureProxyRunning(config, proxyManager, autostart) {
   const updated = deployProxyScript();
   const running = await proxyManager.isRunning();
-  if (running && !updated) return false;
+  if (running && !updated) {
+    return { updated: false, autostart: autostart.install() };
+  }
 
   if (running && updated) {
     // 代理在跑但 proxy.js 已升级，需要重启使新代码生效
     await proxyManager.stop();
   }
   await proxyManager.start(config);
-  autostart.install();
-  return updated; // true 表示发生了升级
+  return { updated, autostart: autostart.install() };
+}
+
+function autostartWarning(result) {
+  if (!result?.autostart || result.autostart.supported !== false) return null;
+  return result.autostart.message || '当前环境不支持自动注册开机自启，请手动保持 proxy 运行';
 }
 
 /**
@@ -263,10 +269,11 @@ async function restartProxy(config, proxyManager, autostart) {
  * 如果 Claude Code 与 Codex 两个接入都已关闭，停代理 + 卸 LaunchAgent
  * 否则保持代理运行（另一个接入还在用）
  */
-async function maybeStopProxy(proxyManager, autostart, settingsPatcher, codexPatcher) {
+async function maybeStopProxy(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher) {
   const claudeStill = settingsPatcher.isPatched();
   const codexStill = codexPatcher?.isPatched?.() || false;
-  if (claudeStill || codexStill) return false;
+  const hermesStill = hermesPatcher?.isPatched?.() || false;
+  if (claudeStill || codexStill || hermesStill) return false;
   autostart.uninstall();
   await proxyManager.stop();
   return true;
@@ -276,8 +283,10 @@ async function enableClaude(config, proxyManager, autostart, settingsPatcher) {
   const s = spinner();
   try {
     s.start('正在接入 Claude Code...');
-    await ensureProxyRunning(config, proxyManager, autostart);
+    const ready = await ensureProxyRunning(config, proxyManager, autostart);
     s.message('✅ 代理已就绪');
+    const warning = autostartWarning(ready);
+    if (warning) s.message(`⚠ ${warning}`);
     settingsPatcher.patch(config);
     s.message('✅ Claude Code 配置已修改');
     s.message('⏳ 验证连接...');
@@ -295,14 +304,14 @@ async function enableClaude(config, proxyManager, autostart, settingsPatcher) {
   }
 }
 
-async function disableClaude(proxyManager, autostart, settingsPatcher, codexPatcher) {
+async function disableClaude(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher) {
   const s = spinner();
   try {
     s.start('正在关闭 Claude Code 接入...');
     settingsPatcher.restore();
     s.message('✅ Claude Code 配置已还原');
-    const stopped = await maybeStopProxy(proxyManager, autostart, settingsPatcher, codexPatcher);
-    s.stop(stopped ? '✅ Claude Code 接入已关闭，代理已停止' : '✅ Claude Code 接入已关闭，代理仍为 Codex 服务');
+    const stopped = await maybeStopProxy(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
+    s.stop(stopped ? '✅ Claude Code 接入已关闭，代理已停止' : '✅ Claude Code 接入已关闭，代理仍为其他 target 服务');
   } catch (err) {
     s.stop(`❌ 关闭失败: ${err.message}`);
   }
@@ -312,8 +321,10 @@ async function enableCodex(config, proxyManager, autostart, codexPatcher) {
   const s = spinner();
   try {
     s.start('正在接入 Codex...');
-    await ensureProxyRunning(config, proxyManager, autostart);
+    const ready = await ensureProxyRunning(config, proxyManager, autostart);
     s.message('✅ 代理已就绪');
+    const warning = autostartWarning(ready);
+    if (warning) s.message(`⚠ ${warning}`);
     codexPatcher.patch(config);
     s.stop(`✅ Codex 已接入，直接执行 codex 即可使用 ${providerName(config)}\n   💡 临时使用 OpenAI：codex -p openai`);
     return true;
@@ -324,14 +335,45 @@ async function enableCodex(config, proxyManager, autostart, codexPatcher) {
   }
 }
 
-async function disableCodex(proxyManager, autostart, settingsPatcher, codexPatcher) {
+async function disableCodex(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher) {
   const s = spinner();
   try {
     s.start('正在关闭 Codex 接入...');
     codexPatcher.restore();
     s.message('✅ Codex 配置已还原');
-    const stopped = await maybeStopProxy(proxyManager, autostart, settingsPatcher, codexPatcher);
-    s.stop(stopped ? '✅ Codex 接入已关闭，代理已停止' : '✅ Codex 接入已关闭，代理仍为 Claude Code 服务');
+    const stopped = await maybeStopProxy(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
+    s.stop(stopped ? '✅ Codex 接入已关闭，代理已停止' : '✅ Codex 接入已关闭，代理仍为其他 target 服务');
+  } catch (err) {
+    s.stop(`❌ 关闭失败: ${err.message}`);
+  }
+}
+
+async function enableHermes(config, proxyManager, autostart, hermesPatcher) {
+  const s = spinner();
+  try {
+    s.start('正在接入 Hermes Agent...');
+    const ready = await ensureProxyRunning(config, proxyManager, autostart);
+    s.message('✅ 代理已就绪');
+    const warning = autostartWarning(ready);
+    if (warning) s.message(`⚠ ${warning}`);
+    hermesPatcher.patch(config);
+    s.stop(`✅ Hermes 已接入，模型配置现在由 ${providerName(config)} Gateway 管理`);
+    return true;
+  } catch (err) {
+    s.stop(`❌ Hermes 接入失败: ${err.message}`);
+    try { hermesPatcher.restore(); } catch {}
+    return false;
+  }
+}
+
+async function disableHermes(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher) {
+  const s = spinner();
+  try {
+    s.start('正在关闭 Hermes Agent 接入...');
+    hermesPatcher.restore();
+    s.message('✅ Hermes 配置已还原');
+    const stopped = await maybeStopProxy(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
+    s.stop(stopped ? '✅ Hermes 接入已关闭，代理已停止' : '✅ Hermes 接入已关闭，代理仍为其他 target 服务');
   } catch (err) {
     s.stop(`❌ 关闭失败: ${err.message}`);
   }
@@ -395,7 +437,17 @@ async function syncCodexPatchOnStartup(config, codexPatcher) {
 }
 
 // 主面板
-async function mainPanel(config, proxyManager, autostart, settingsPatcher, codexPatcher) {
+function targetSnapshot(settingsPatcher, codexPatcher, hermesPatcher) {
+  const hermesAvailable = hermesPatcher?.isAvailable?.() || false;
+  return {
+    claudePatched: settingsPatcher.isPatched(),
+    codexPatched: codexPatcher?.isPatched?.() || false,
+    hermesAvailable,
+    hermesPatched: hermesAvailable ? (hermesPatcher?.isPatched?.() || false) : false,
+  };
+}
+
+async function mainPanel(config, proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher) {
   await syncProxyOnStartup(config, proxyManager, autostart);
   await syncCodexPatchOnStartup(config, codexPatcher);
   while (true) {
@@ -403,9 +455,9 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
     config.thinking = config.thinking || 'enabled';
     const thinkingSupported = providerSupportsThinking(config);
     const running = await proxyManager.isRunning();
-    const claudePatched = settingsPatcher.isPatched();
-    const codexPatched = codexPatcher?.isPatched?.() || false;
-    const anyEnabled = claudePatched || codexPatched;
+    const targets = targetSnapshot(settingsPatcher, codexPatcher, hermesPatcher);
+    const { claudePatched, codexPatched, hermesAvailable, hermesPatched } = targets;
+    const anyEnabled = claudePatched || codexPatched || hermesPatched;
     const thinkingText = thinkingSupported
       ? (config.thinking === 'disabled' ? '关闭' : (providerSupportsThinkingEffort(config) ? `开启 (${config.effort})` : '开启'))
       : '不支持';
@@ -413,14 +465,17 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
     // 异常：有接入开启但代理没在跑（手动 kill 了代理或 LaunchAgent 没拉起来）
     const anomaly = anyEnabled && !running;
 
-    intro(`${I.tool} Provider Gateway × Claude Code / Codex`);
+    intro(`${I.tool} Provider Gateway × Claude Code / Codex / Hermes`);
     const claudeLine = `Claude Code: ${claudePatched ? `${I.dot} 已接入` : `${I.circle} 未接入`}`;
     const codexLine = `Codex:       ${codexPatched ? `${I.dot} 已接入 (直接 codex 即可使用)` : `${I.circle} 未接入`}`;
+    const hermesLine = hermesAvailable
+      ? `Hermes:      ${hermesPatched ? `${I.dot} 已接入` : `${I.circle} 未接入`}`
+      : `Hermes:      未发现 config.yaml`;
     const proxyLine = anomaly
       ? `代理:        ${I.warn} 接入已开但代理未运行`
       : (running ? `代理:        ${I.dot} 127.0.0.1:17861` : `代理:        ${I.circle} 未运行`);
     note(
-      `${claudeLine}\n${codexLine}\n${proxyLine}\nProvider: ${providerName(config)}  |  模型: ${config.model}  |  思考模式: ${thinkingText}`
+      `${claudeLine}\n${codexLine}\n${hermesLine}\n${proxyLine}\nProvider: ${providerName(config)}  |  模型: ${config.model}  |  思考模式: ${thinkingText}`
     );
 
     const options = [];
@@ -437,6 +492,13 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
         label: codexPatched ? `${I.cmd} 关闭 Codex 接入` : `${I.cmd} 开启 Codex 接入`,
       });
     }
+    if (hermesAvailable) {
+      options.push({
+        value: hermesPatched ? 'disable-hermes' : 'enable-hermes',
+        label: hermesPatched ? `${I.wrench} 关闭 Hermes 接入` : `${I.wrench} 开启 Hermes 接入`,
+      });
+      options.push({ value: 'diagnose-hermes', label: `${I.cog} Hermes 诊断` });
+    }
     if (thinkingSupported) {
       options.push({
         value: 'toggle-thinking',
@@ -452,11 +514,20 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
     if (choice === 'enable-claude') {
       await enableClaude(config, proxyManager, autostart, settingsPatcher);
     } else if (choice === 'disable-claude') {
-      await disableClaude(proxyManager, autostart, settingsPatcher, codexPatcher);
+      await disableClaude(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
     } else if (choice === 'enable-codex') {
       await enableCodex(config, proxyManager, autostart, codexPatcher);
     } else if (choice === 'disable-codex') {
-      await disableCodex(proxyManager, autostart, settingsPatcher, codexPatcher);
+      await disableCodex(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
+    } else if (choice === 'enable-hermes') {
+      await enableHermes(config, proxyManager, autostart, hermesPatcher);
+    } else if (choice === 'disable-hermes') {
+      await disableHermes(proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
+    } else if (choice === 'diagnose-hermes') {
+      const health = await proxyManager.getHealth();
+      const serviceStatus = autostart.status ? autostart.status() : { installed: autostart.isInstalled?.() || false };
+      const diagnosis = hermesPatcher.diagnose(health, serviceStatus);
+      note(JSON.stringify(diagnosis, null, 2));
     } else if (choice === 'toggle-thinking') {
       config = { ...config, thinking: config.thinking === 'disabled' ? 'enabled' : 'disabled' };
       configStore.write(config);
@@ -466,6 +537,7 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
       }
       if (claudePatched) settingsPatcher.patch(config);
       if (codexPatched) codexPatcher.patch(config);
+      if (hermesPatched) hermesPatcher.patch(config);
       note(`✅ 思考模式已${config.thinking === 'disabled' ? '关闭' : '开启'}`);
     } else if (choice === 'reconfig') {
       const newCfg = await configWizard(config);
@@ -475,6 +547,7 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
         }
         if (claudePatched) settingsPatcher.patch(newCfg);
         if (codexPatched) codexPatcher.patch(newCfg);
+        if (hermesPatched) hermesPatcher.patch(newCfg);
         config = newCfg;
       }
     } else if (choice === 'fix') {
@@ -488,4 +561,14 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
   return config;
 }
 
-module.exports = { configWizard, mainPanel, supportsEmoji, buildProviderConfig, providerName, providerSupportsThinking, providerSupportsThinkingEffort };
+module.exports = {
+  configWizard,
+  mainPanel,
+  supportsEmoji,
+  buildProviderConfig,
+  providerName,
+  providerSupportsThinking,
+  providerSupportsThinkingEffort,
+  maybeStopProxy,
+  targetSnapshot,
+};

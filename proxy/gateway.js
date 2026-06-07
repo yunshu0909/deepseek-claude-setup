@@ -136,9 +136,9 @@ function anthropicTarget(providerConfig, fallbackAnthropicBaseUrl, requestUrl) {
  *   effort: 已 normalize 的 'max' | 'high'
  * @returns {object} 合并进 Chat 请求体的扩展字段
  */
-function buildChatExtras(caps, { messages, tools, thinking, effort }) {
+function buildChatExtras(caps, { messages, tools, thinking, effort, stream }) {
   const options = {};
-  if (caps.chatStreamOptions !== false) options.stream_options = { include_usage: true };
+  if (stream !== false && caps.chatStreamOptions !== false) options.stream_options = { include_usage: true };
   if (thinking !== 'unsupported') {
     options.thinking = { type: thinking };
     if (thinking === 'enabled' && caps.preservedThinking === 'clear_thinking' && messages.some(m => m.reasoning_content)) {
@@ -236,12 +236,12 @@ function attachAdapter(def) {
   def.buildChatRequestSpec = function buildChatRequestSpec(gatewayRequest, providerConfig) {
     const { model, conversation, tools, thinking, effort } = gatewayRequest;
     const messages = conversation.messages;
-    const body = { model, messages, stream: true };
+    const body = { model, messages, stream: gatewayRequest.stream !== false };
     if (tools) {
       body.tools = tools;
       body.tool_choice = 'auto';
     }
-    Object.assign(body, buildChatExtras(caps, { messages, tools, thinking, effort }));
+    Object.assign(body, buildChatExtras(caps, { messages, tools, thinking, effort, stream: gatewayRequest.stream }));
     return {
       target: chatTarget(providerConfig, defaults.baseUrl),
       body,

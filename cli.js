@@ -18,6 +18,7 @@ const proxyManager = require('./src/proxy-manager');
 const autostart = require('./src/autostart');
 const settingsPatcher = require('./src/settings-patcher');
 const codexPatcher = require('./src/codex-patcher');
+const hermesPatcher = require('./src/hermes-patcher');
 const ui = require('./src/ui');
 const pkg = require('./package.json');
 
@@ -133,10 +134,10 @@ async function main() {
     const newCfg = await ui.configWizard(null);
     if (!newCfg) return;  // 用户取消
     // 配置完直接进主面板
-    await ui.mainPanel(newCfg, proxyManager, autostart, settingsPatcher, codexPatcher);
+    await ui.mainPanel(newCfg, proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
   } else {
     // 已有配置 → 主面板
-    await ui.mainPanel(config, proxyManager, autostart, settingsPatcher, codexPatcher);
+    await ui.mainPanel(config, proxyManager, autostart, settingsPatcher, codexPatcher, hermesPatcher);
   }
 }
 
