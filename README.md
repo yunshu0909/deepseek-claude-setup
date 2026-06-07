@@ -2,6 +2,8 @@
 
 让 Claude Code、OpenAI Codex CLI 和 Hermes Agent 透明使用 DeepSeek 模型，且**思考模式真的生效**。
 
+> 🚧 当前版本聚焦 **DeepSeek（含 Hermes）**；智谱 / Kimi / Qwen / MiniMax 等**多模型即将支持**（开发中，详见底部路线图）。
+
 ---
 
 ## 解决三个真实痛点
