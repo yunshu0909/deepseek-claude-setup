@@ -161,7 +161,7 @@ async function appendStageZeroCases(profile, testCases, execution, context) {
   for (const [id, passed, message, assertions, refs] of [
     ['TC-003', fixtures.tc003, 'CLI rejects missing provider before run', 1, fixtures.evidenceRefs],
     ['TC-004', fixtures.tc004, 'Unknown provider writes a failed preflight report', 1, fixtures.evidenceRefs],
-    ['TC-005', Boolean(profile.id === 'deepseek' && profile.stages.length === 5), 'DeepSeek profile resolved', profile.stages.length, [contextEvidence]],
+    ['TC-005', Boolean(profile.id && profile.stages.length === 5), `${profile.displayName} profile resolved`, profile.stages.length, [contextEvidence]],
     ['TC-006', contextOk, 'Platform context matches the target release branch', requiredContext.length + 1, [contextEvidence]],
     ['TC-007', fixtures.tc007, 'Stage zero fixture failure blocks true-key execution', 2, fixtures.evidenceRefs],
   ]) {
@@ -316,15 +316,15 @@ function appendCaptureCases(profile, testCases, capture, evidenceRef) {
   const dx = steps['codex:pro:on:max'];
   const df = steps['codex:flash:off:-'];
   const dh = steps['codex:pro:on:high'];
-  captureCase(profile, testCases, 'TC-024', ch?.model === 'deepseek-v4-pro' && dx?.model === 'deepseek-v4-pro', 'Pro capture model fields match', 2, evidenceRef);
+  captureCase(profile, testCases, 'TC-024', ch?.model === profile.defaultModel && dx?.model === profile.defaultModel, 'Pro capture model fields match', 2, evidenceRef);
   captureCase(
     profile,
     testCases,
     'TC-025',
     byStep['claude:flash:off:-']?.switchedConfigRoot === true
       && byStep['codex:flash:off:-']?.switchedConfigRoot === true
-      && cf?.model === 'deepseek-v4-flash'
-      && df?.model === 'deepseek-v4-flash',
+      && cf?.model === profile.flashModel
+      && df?.model === profile.flashModel,
     'First Flash requests after in-run gateway restart contain no Pro model',
     4,
     evidenceRef,

@@ -123,7 +123,7 @@ const PROFILES = {
   zai: {
     id: 'zai',
     displayName: '智谱 BigModel',
-    releaseBranch: 'main',
+    releaseBranch: 'codex/v1.6.1-providers',
     apiKeyEnv: 'ZHIPU_API_KEY',
     defaultModel: 'glm-5.1',
     flashModel: 'glm-5-turbo',
@@ -138,7 +138,7 @@ const PROFILES = {
   kimi: {
     id: 'kimi',
     displayName: 'Kimi (Moonshot)',
-    releaseBranch: 'main',
+    releaseBranch: 'codex/v1.6.1-providers',
     apiKeyEnv: 'MOONSHOT_API_KEY',
     defaultModel: 'kimi-k2.6',
     flashModel: 'kimi-k2-turbo-preview',
