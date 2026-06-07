@@ -105,14 +105,14 @@ function baseEnv(homeDir) {
   return env;
 }
 
-function parseSequence(input) {
+function parseSequence(input, models = { pro: 'deepseek-v4-pro', flash: 'deepseek-v4-flash' }) {
   const raw = input || process.env.CLIENT_E2E_SEQUENCE || '';
   if (!raw) return [];
   return raw.split(/\s*->\s*/).filter(Boolean).map(step => {
     const [target, model, thinking, effort] = step.split(':');
     return {
       target: target === 'ds' ? 'codex' : target,
-      model: model === 'flash' ? 'deepseek-v4-flash' : 'deepseek-v4-pro',
+      model: model === 'flash' ? models.flash : models.pro,
       thinking: thinking === 'off' ? 'disabled' : 'enabled',
       effort: effort && effort !== '-' ? effort : 'max',
       raw: step,
@@ -348,9 +348,10 @@ function assertCaptureStep(stepResult, expected) {
 }
 
 async function runCaptureMatrix(options = {}) {
-  const steps = parseSequence(options.sequence).length ? parseSequence(options.sequence) : parseSequence('codex:pro:on:max');
   const provider = getProviderProfile(options.providerId || process.env.CLIENT_E2E_PROVIDER || 'deepseek');
   if (!provider) throw new Error('unknown provider');
+  const seqModels = { pro: provider.defaultModel, flash: provider.flashModel };
+  const steps = parseSequence(options.sequence, seqModels).length ? parseSequence(options.sequence, seqModels) : parseSequence('codex:pro:on:max', seqModels);
   const results = await runCaptureSequence(steps);
   let positiveAssertions = 0;
   for (let index = 0; index < steps.length; index++) {
