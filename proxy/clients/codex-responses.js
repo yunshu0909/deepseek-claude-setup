@@ -39,7 +39,7 @@ function sendSse(res, event) {
  */
 function streamChatToResponses(res, requestSpec, streamMode, deps) {
   const { target, body: chatPayload, apiKey } = requestSpec;
-  const { parseChunk, log } = deps;
+  const { parseChunk, log, captureThinking } = deps;
 
   const responseId = `resp_${Date.now()}`;
   const createdAt = Math.floor(Date.now() / 1000);
@@ -53,6 +53,7 @@ function streamChatToResponses(res, requestSpec, streamMode, deps) {
   let responseUsage = null;
   let sawAnyDelta = false;
   let reasoningChars = 0;
+  let reasoningText = '';
   let textChars = 0;
   const reqStartTs = Date.now();
 
@@ -82,6 +83,7 @@ function streamChatToResponses(res, requestSpec, streamMode, deps) {
   function appendReasoning(deltaText) {
     currentItem.text += deltaText;
     reasoningChars += deltaText.length;
+    if (captureThinking) reasoningText += deltaText;
     emit({
       type: 'response.reasoning_text.delta',
       output_index: currentItem.output_index, item_id: currentItem.id, content_index: 0,
@@ -221,6 +223,7 @@ function streamChatToResponses(res, requestSpec, streamMode, deps) {
       + `usage=${usage ? `${usage.input_tokens}/${usage.output_tokens}` : 'none'} `
       + `${elapsed}ms`
     );
+    if (captureThinking && reasoningText) captureThinking(responseId, reasoningText);
   }
 
   function emitFailed(error) {

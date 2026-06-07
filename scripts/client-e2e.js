@@ -179,6 +179,8 @@ function baseEnv(homeDir) {
   for (const key of ['LANG', 'LC_ALL', 'LC_CTYPE', 'SHELL', 'TERM']) {
     if (process.env[key]) env[key] = process.env[key];
   }
+  // 测试开关：把"思考落盘"开关透传给网关/客户端子进程（默认未设则不传，行为不变）
+  if (process.env.DEEPSEEK_CAPTURE_THINKING) env.DEEPSEEK_CAPTURE_THINKING = process.env.DEEPSEEK_CAPTURE_THINKING;
   // Windows 下 Node child_process 缺 SYSTEMROOT 会挂；找可执行文件需要 PATHEXT；
   // 一些子进程会读 APPDATA / LOCALAPPDATA / USERPROFILE 取用户配置。
   if (process.platform === 'win32') {

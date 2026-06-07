@@ -34,6 +34,20 @@ const SERVICE_NAME = 'deepseek-claude-proxy';
 // 测试 runner 需要独立日志，避免和用户正常 17861 代理混在一起误判。
 const LOG_PATH = process.env.DEEPSEEK_CLAUDE_LOG_PATH || path.join(os.tmpdir(), 'deepseek-claude-proxy.log');
 
+// 测试专用：DEEPSEEK_CAPTURE_THINKING=1 时把模型思考(reasoning)正文落盘到 LOG 同目录的 thinking/ 下，
+// 便于核验"思考是否真有意义"。默认关闭——网关也跑在真实用户机器上，不默认记录所有人的思考内容（隐私/磁盘）。
+const CAPTURE_THINKING = process.env.DEEPSEEK_CAPTURE_THINKING === '1';
+const THINKING_DIR = path.join(path.dirname(LOG_PATH), 'thinking');
+
+// 把一轮思考正文写盘（仅 CAPTURE_THINKING 开启时；Anthropic 与 Codex 两条路径共用）
+function writeThinking(id, text) {
+  if (!CAPTURE_THINKING || !text) return;
+  try {
+    fs.mkdirSync(THINKING_DIR, { recursive: true });
+    fs.writeFileSync(path.join(THINKING_DIR, `thinking-${id}.txt`), text);
+  } catch {}
+}
+
 function log(msg) {
   const ts = new Date().toISOString().slice(11, 19);
   try { fs.appendFileSync(LOG_PATH, `[${ts}] ${msg}\n`); } catch {}
@@ -121,6 +135,7 @@ function handleResponses(req, res, payload) {
   codexResponses.streamChatToResponses(res, requestSpec, streamMode, {
     parseChunk: parsed => provider.parseChatStreamChunk(parsed),
     log,
+    captureThinking: writeThinking,
   });
 }
 
@@ -307,6 +322,7 @@ function handleAnthropic(req, res, payload) {
       // 嗅探 SSE 流统计 thinking/text 字符数（仅诊断，不影响透传；Anthropic 协议中立）
       const isStream = (upstreamRes.headers['content-type'] || '').includes('event-stream');
       let thinkingChars = 0;
+      let thinkingText = '';
       let textChars = 0;
       let inputTokens = 0;
       let outputTokens = 0;
@@ -326,7 +342,7 @@ function handleAnthropic(req, res, payload) {
             try {
               const evt = JSON.parse(data);
               if (evt.type === 'content_block_delta') {
-                if (evt.delta?.type === 'thinking_delta') thinkingChars += (evt.delta.thinking || '').length;
+                if (evt.delta?.type === 'thinking_delta') { thinkingChars += (evt.delta.thinking || '').length; if (CAPTURE_THINKING) thinkingText += (evt.delta.thinking || ''); }
                 if (evt.delta?.type === 'text_delta') textChars += (evt.delta.text || '').length;
               }
               if (evt.type === 'message_delta' && evt.usage) {
@@ -348,7 +364,7 @@ function handleAnthropic(req, res, payload) {
           try {
             const j = JSON.parse(jsonBuf);
             for (const block of j.content || []) {
-              if (block.type === 'thinking') thinkingChars += (block.thinking || '').length;
+              if (block.type === 'thinking') { thinkingChars += (block.thinking || '').length; if (CAPTURE_THINKING) thinkingText += (block.thinking || ''); }
               if (block.type === 'text') textChars += (block.text || '').length;
             }
             inputTokens = j.usage?.input_tokens || 0;
@@ -362,6 +378,8 @@ function handleAnthropic(req, res, payload) {
           + `text=${textChars}chars stream=${isStream} `
           + `usage=${inputTokens}/${outputTokens} ${elapsed}ms`
         );
+        // 测试开关开启时，把本轮思考正文落盘（默认关闭，不影响真实用户与默认测试行为）
+        writeThinking(reqStartTs, thinkingText);
       });
 
       upstreamRes.pipe(res);
