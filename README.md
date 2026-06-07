@@ -1,8 +1,24 @@
-# DeepSeek × Claude Code / Codex / Hermes 一键配置工具
+# DeepSeek / 智谱 / Kimi × Claude Code / Codex / Hermes 一键配置工具
 
-让 Claude Code、OpenAI Codex CLI 和 Hermes Agent 透明使用 DeepSeek 模型，且**思考模式真的生效**。
+让 Claude Code、OpenAI Codex CLI 和 Hermes Agent 透明使用 DeepSeek、智谱 BigModel、Kimi 模型，且**思考模式真的生效**。
 
-> 🚧 当前版本聚焦 **DeepSeek（含 Hermes）**；智谱 / Kimi / Qwen / MiniMax 等**多模型即将支持**（开发中，详见底部路线图）。
+> ✅ 当前版本（v1.6.1）已支持 **3 个 provider**：DeepSeek、智谱 BigModel、Kimi（Moonshot）。三家都跑过同一套真实客户端认证（详见底部「支持的 Provider」与路线图）。
+
+---
+
+## 支持的 Provider
+
+配置向导**第一步就是选 Provider**，选好后输该 provider 的 API Key、选模型，再决定接入 Claude Code / Codex / Hermes 哪几个客户端。新增 provider 只需在 registry 注册一个 adapter，向导自动展开。
+
+| Provider | id | 默认端点 | 模型示例 | 思考模式 | 思考强度档（effort） |
+|---|---|---|---|---|---|
+| **DeepSeek** | `deepseek` | api.deepseek.com | deepseek-v4-pro / deepseek-v4-flash | ✅ | ✅ high / max |
+| **智谱 BigModel** | `zai` | open.bigmodel.cn | glm-5.1 / glm-5 / glm-5-turbo / glm-4.7 | ✅ | ❌（向导自动跳过强度选择） |
+| **Kimi（Moonshot）** | `kimi` | api.moonshot.cn | kimi-k2.6 / kimi-k2.5 | ✅ | ❌（向导自动跳过强度选择） |
+
+> 智谱 / Kimi 支持思考模式但没有 effort 强度档，向导检测到 `thinkingEffort:false` 会自动跳过强度选择；只有 DeepSeek 会让你选 high / max。
+
+三家 provider 都经过**同一套 56 例真实客户端认证**（真 Claude Code + 真 Codex + Hermes 打真实 API，非 capture 演习）：macOS 上 DeepSeek / 智谱 / Kimi 各 55/55 PASS，Linux 上 DeepSeek 55/55 PASS。
 
 ---
 
@@ -12,7 +28,7 @@
 
 Claude Code 的 `effortLevel` 映射到 Anthropic 协议的 `thinking.budget_tokens`，但 DeepSeek 的 Anthropic 兼容端点**忽略这个字段**——真正控制思考深度的是 `output_config.effort`。所以你设了"max effort"实际跑出来是默认强度。
 
-**解法**：本地代理在请求里强制注入 `output_config.effort`，DeepSeek 才认。
+**解法**：本地 Provider Gateway 按当前 provider 的能力声明注入正确字段（DeepSeek 强制注入 `output_config.effort`；智谱 / Kimi 没有 effort 档，则只注入 thinking 开关），各家才认。
 
 ### 2. Codex 接 DeepSeek，必须协议翻译 + 真流式
 
@@ -34,7 +50,7 @@ Hermes Agent 默认有自己的模型配置和 provider key 管理。如果它�
 npx -y github:yunshu0909/deepseek-claude-setup
 ```
 
-**首次运行**：拉到 GitHub 最新版，进配置向导（输入 DeepSeek API Key → 选模型 → 选思考模式 → 选思考深度），然后进主面板。
+**首次运行**：拉到 GitHub 最新版，进配置向导（**选 Provider（DeepSeek / 智谱 / Kimi）** → 输该 provider 的 API Key → 选模型 → 选思考模式 →（仅 DeepSeek）选思考深度），然后进主面板。
 
 **已经装过的用户**（v1.4.0+）：每次启动自动检测 GitHub `main` 最新 commit——发现新版本就自动清 `~/.npm/_npx` 缓存 + 重新 `npx` + 重启进程，**无需手动操作**。`proxy.js` 同样会被检测内容变化并热重启代理。
 
@@ -273,25 +289,29 @@ CHAT_DONE model=deepseek-v4-pro stream=false status=200 1750ms
 
 ---
 
-## 开发者认证（v1.5.0）
+## 开发者认证
 
-v1.5.0 对普通用户的主面板和 npx 使用路径不做体验改版，主要新增开发者侧的 provider 自动化认证能力，用来判断 DeepSeek 后续回归和新模型接入是否真的可用。
+开发者侧的 provider 自动化认证能力（v1.5.0 引入，v1.6.1 已覆盖三家 provider），用来判断每个 provider 的回归和新模型接入是否真的可用。`--provider` 接受 `deepseek` / `zai` / `kimi`，各自读自己的 Key 环境变量（`DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` / `MOONSHOT_API_KEY`）。
 
 ```bash
 npm run certify:provider -- --provider deepseek --dry-run
 env -u DEEPSEEK_API_KEY npm run certify:provider -- --provider deepseek
 DEEPSEEK_API_KEY=<key> npm run certify:provider -- --provider deepseek
+ZHIPU_API_KEY=<key>    npm run certify:provider -- --provider zai
+MOONSHOT_API_KEY=<key> npm run certify:provider -- --provider kimi
 DEEPSEEK_API_KEY=<key> npm run certify:provider -- --provider deepseek --target hermes-linux
 npm run certify:release -- <mac-report> <windows-report> <linux-report>
 ```
 
-认证器会生成 `reports/provider-certification/<run-id>/report.json` 和 `report.md`，并按 PRD-015 的 56 条用例记录 `PASS / FAIL / BLOCKED / SKIPPED`。`dry-run` 只表示计划生成成功，固定为 `planReady=true`、`passed=false`，不会冒充真实认证通过。
+认证器会生成 `reports/provider-certification/<run-id>/report.json` 和 `report.md`，并按 56 条用例记录 `PASS / FAIL / BLOCKED / SKIPPED`。`dry-run` 只表示计划生成成功，固定为 `planReady=true`、`passed=false`，不会冒充真实认证通过。
 
 当前认证范围包括：
-- DeepSeek health / Anthropic Messages / OpenAI Responses 基础连通
-- Claude Code 与 Codex 的模型切换、thinking 开关、effort、工具调用、命令执行、长任务
+- 各 provider 的 health / Anthropic Messages / OpenAI Chat（Codex 桥接）基础连通
+- Claude Code 与 Codex 的模型切换、thinking 开关、effort（仅有 effort 档的 provider）、工具调用、命令执行、长任务
 - Hermes / Linux systemd 真场景 smoke
 - 报告上下文、dirty worktree、true-key 证据、Key 泄露扫描、缺平台/缺 P0/假绿防护
+
+真实认证结果：macOS 上 DeepSeek / 智谱 / Kimi 各 55/55 PASS，Linux 上 DeepSeek 55/55 PASS（真客户端打真实 API，非 capture 演习）。
 
 Windows 报告可由 Windows 真机单独生成后人工合并；release gate 仍要求三平台报告来自同一目标分支和 commit。
 
@@ -371,10 +391,13 @@ systemctl daemon-reload 2>/dev/null
 - ✅ **真·自更新（v1.4.0）** — cli.js 启动检测 GitHub `main` 最新 commit，发现新版自动清 `~/.npm/_npx` + 重新 npx + 重启进程（用 `DEEPSEEK_CLAUDE_SKIP_UPDATE` 环境变量防死循环）
 - ✅ **Hermes Agent 接管（v1.4.1）** — 新增 `/v1/chat/completions` 入口、Hermes config patch/restore/status、Linux systemd、非交互 `--enable-hermes`，服务器真实 `hermes -z` smoke 通过
 - ✅ **Provider Certification Automation（v1.5.0）** — 新增 `certify:provider`、`certify:release`、`smoke:provider`、`e2e:clients`、`smoke:hermes-linux`，把 DeepSeek 作为基准 provider 建立可复用认证报告和三平台门禁
+- ✅ **Key 泄漏止血（v1.5.1）** — 客户端配置（`~/.claude` / `~/.codex`）改写本地占位 token，不再把真实 provider key 明文落进客户端文件
+- ✅ **Provider Gateway 架构（v1.6.0）** — 把 DeepSeek 从一次性透传迁到 provider 无关、能力声明驱动的网关核心 + 原子部署；智谱 / Kimi 的实验底子保存在 git tag `archive/v1.6.0-provider-gateway`
+- ✅ **接入智谱 + Kimi（v1.6.1）** — 新增 `proxy/providers/zai.js` / `proxy/providers/kimi.js` 两个 adapter，向导第一步可选 Provider；三家共用同一套真实客户端认证
 
 下一步：
 
-- **逐家 provider 接入** — 用 v1.5.0 认证体系逐家接入并验证 ZAI / Kimi / Qwen / MiniMax / 豆包，避免一次性混发 Provider Gateway 大分支
+- **继续扩 provider** — 网关核心已 provider 无关，新增 Qwen / MiniMax / 豆包等只需写一个声明 endpoint / 模型 / capabilities 的 adapter
 
 ---
 
