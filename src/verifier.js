@@ -1,21 +1,80 @@
+/**
+ * Provider key / 接入连通性验证
+ *
+ * 负责：
+ * - 按 active provider 的 anthropicBaseUrl + 默认模型发最小 Anthropic Messages 请求验证 key 有效性
+ * - 按 active provider 的 capabilities 决定 thinking / output_config 字段，避免向不兼容 provider 发专属字段
+ * - 通过本地 gateway 验证完整接入链路（验 Claude Code 接入按钮的 spinner）
+ *
+ * @module src/verifier
+ */
 const http = require('http');
 const https = require('https');
+const { URL } = require('url');
 
-function checkApiKey(apiKey) {
+const providerRegistry = require('../proxy/providers');
+
+/**
+ * 把 provider 对象 / id 归一成 provider 定义
+ * @param {object|string} providerOrId - provider 对象、id 字符串或空（按 deepseek 兜底）
+ * @returns {object|null} provider 定义
+ */
+function getProvider(providerOrId) {
+  if (!providerOrId) return providerRegistry.getProvider('deepseek');
+  if (typeof providerOrId === 'string') return providerRegistry.getProvider(providerOrId);
+  return providerOrId;
+}
+
+/**
+ * 拼出 Anthropic Messages 完整 endpoint
+ * @param {string} anthropicBaseUrl - 如 https://api.deepseek.com/anthropic
+ * @returns {{hostname: string, port: number, path: string, protocol: string}} url 各部分；path 已含 /v1/messages 后缀
+ */
+function resolveAnthropicTarget(anthropicBaseUrl) {
+  const u = new URL(anthropicBaseUrl);
+  const basePath = u.pathname.replace(/\/+$/, '');
+  return {
+    hostname: u.hostname,
+    port: u.port ? Number(u.port) : (u.protocol === 'http:' ? 80 : 443),
+    path: `${basePath}/v1/messages`,
+    protocol: u.protocol,
+  };
+}
+
+/**
+ * 用 provider 自身 endpoint 校验 API key 是否有效
+ * @param {object|string} providerOrId - provider 对象或 id；不传则按 deepseek 兼容
+ * @param {string} apiKey - 用户输入的 API key
+ * @returns {Promise<boolean>} true 表示 key 有效（或该 provider 无 Anthropic 端点不阻塞）
+ */
+function checkApiKey(providerOrId, apiKey) {
+  const provider = getProvider(providerOrId);
+  if (!provider) return Promise.resolve(false);
+  // 没有 Anthropic 兼容端点的 provider 这条路径校验不了，直接接受 key 不阻塞流程，由后续接入流程兜底
+  const anthropicBaseUrl = provider.defaults?.anthropicBaseUrl;
+  if (!anthropicBaseUrl) return Promise.resolve(true);
+
+  const model = provider.defaultModel || provider.models?.[0]?.id;
+  const target = resolveAnthropicTarget(anthropicBaseUrl);
+  const client = target.protocol === 'http:' ? http : https;
+
   return new Promise(resolve => {
     const body = JSON.stringify({
-      model: 'deepseek-v4-pro',
+      model,
       max_tokens: 16,
       messages: [{ role: 'user', content: 'hi' }],
     });
-    const req = https.request({
-      hostname: 'api.deepseek.com',
-      path: '/anthropic/v1/messages',
+    const req = client.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.path,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body),
+        // 同时带 x-api-key 与 Bearer：不同 provider 的 Anthropic 端点鉴权头不一致，两个都给最稳
         'x-api-key': apiKey,
+        authorization: `Bearer ${apiKey}`,
         'anthropic-version': '2023-06-01',
       },
       timeout: 10000,
@@ -37,16 +96,29 @@ function checkApiKey(apiKey) {
   });
 }
 
+/**
+ * 通过本地 gateway 验证完整接入链路
+ * @param {object} config - 归一化后的 gateway 配置（含 activeProvider + 顶层 model/thinking/effort 兼容字段）
+ * @returns {Promise<{ok: boolean, hasThinking?: boolean, error?: string}>}
+ */
 function verify(config = {}) {
-  return new Promise((resolve, reject) => {
-    const thinking = config.thinking === 'disabled' ? 'disabled' : 'enabled';
+  const provider = getProvider(config.activeProvider);
+  const caps = provider?.capabilities || {};
+  const model = config.model || provider?.defaultModel || provider?.models?.[0]?.id;
+  const thinking = config.thinking === 'disabled' ? 'disabled' : 'enabled';
+
+  return new Promise(resolve => {
     const payload = {
-      model: config.model || 'deepseek-v4-pro',
+      model,
       max_tokens: 64,
       messages: [{ role: 'user', content: 'ping' }],
-      thinking: { type: thinking, budget_tokens: 32768 },
     };
-    if (thinking === 'enabled') {
+    // thinking 字段：provider 声明支持时才发（budget_tokens 对不需要它的 provider 无副作用）
+    if (caps.thinking) {
+      payload.thinking = { type: thinking, budget_tokens: 32768 };
+    }
+    // output_config.effort 是 thinkingEffort 档位专属：仅在 provider 声明支持时注入（zai/kimi thinkingEffort:false 不发）
+    if (caps.thinking && thinking === 'enabled' && caps.thinkingEffort !== false) {
       payload.output_config = { effort: config.effort || 'max' };
     }
     const body = JSON.stringify(payload);
@@ -63,9 +135,13 @@ function verify(config = {}) {
       res.on('data', c => chunks.push(c));
       res.on('end', () => {
         if (res.statusCode === 200) {
-          const r = JSON.parse(Buffer.concat(chunks).toString());
-          const hasThinking = r.content && r.content.some(b => b.type === 'thinking');
-          resolve({ ok: true, hasThinking });
+          try {
+            const r = JSON.parse(Buffer.concat(chunks).toString());
+            const hasThinking = r.content && r.content.some(b => b.type === 'thinking');
+            resolve({ ok: true, hasThinking });
+          } catch (err) {
+            resolve({ ok: false, error: `解析响应失败: ${err.message}` });
+          }
         } else {
           resolve({ ok: false, error: `HTTP ${res.statusCode}` });
         }

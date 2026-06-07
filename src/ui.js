@@ -1,6 +1,80 @@
 const { intro, outro, text, select, confirm, spinner, note, cancel, isCancel } = require('@clack/prompts');
 const configStore = require('./config-store');
+const providerRegistry = require('../proxy/providers');
 const verifier = require('./verifier');
+
+/**
+ * 取当前 active provider 定义（兜底 deepseek）
+ * @param {object|null} config - gateway 配置（归一化与否均可）
+ * @returns {object} provider 定义
+ */
+function activeProvider(config) {
+  return providerRegistry.getProvider(config?.activeProvider || 'deepseek') || providerRegistry.getProvider('deepseek');
+}
+
+/**
+ * 取当前 active provider 的展示名
+ * @param {object|null} config - gateway 配置
+ * @returns {string} 展示名
+ */
+function providerName(config) {
+  return activeProvider(config)?.displayName || config?.activeProvider || 'DeepSeek';
+}
+
+/**
+ * 当前 provider 是否支持 thinking（默认按支持处理，仅显式 false 才视为不支持）
+ * @param {object|null} config - gateway 配置
+ * @returns {boolean}
+ */
+function providerSupportsThinking(config) {
+  return activeProvider(config)?.capabilities?.thinking !== false;
+}
+
+/**
+ * 当前 provider 是否支持 thinking effort 档位（zai/kimi thinkingEffort:false → 不支持）
+ * @param {object|null} config - gateway 配置
+ * @returns {boolean}
+ */
+function providerSupportsThinkingEffort(config) {
+  return activeProvider(config)?.capabilities?.thinkingEffort !== false;
+}
+
+/**
+ * 基于向导输入构造 Provider Gateway 配置
+ *
+ * 执行步骤：
+ * 1. 归一化现有配置（兼容旧版扁平 DeepSeek-only 结构）
+ * 2. 保留其它 provider 已存的字段，仅覆盖当前 provider 的 apiKey/model
+ * 3. 再次归一化产出 {activeProvider, thinking, effort, providers, apiKey, model}
+ *
+ * @param {object|null} existing - 现有配置，兼容旧版扁平结构
+ * @param {string} providerId - 当前选中的 provider id
+ * @param {{apiKey: string, model: string, thinking: string, effort: string}} fields - 向导输入字段
+ * @returns {object} 归一化后的 Provider Gateway 配置
+ */
+function buildProviderConfig(existing, providerId, fields) {
+  const normalized = configStore.normalizeConfig(existing) || {
+    activeProvider: providerId,
+    thinking: 'enabled',
+    effort: 'max',
+    providers: {},
+  };
+  const previousProviders = normalized.providers || {};
+  const previousProviderConfig = previousProviders[providerId] || {};
+  return configStore.normalizeConfig({
+    activeProvider: providerId,
+    thinking: fields.thinking,
+    effort: fields.effort,
+    providers: {
+      ...previousProviders,
+      [providerId]: {
+        ...previousProviderConfig,
+        apiKey: fields.apiKey,
+        model: fields.model,
+      },
+    },
+  });
+}
 
 /**
  * 跨平台终端 emoji 支持检测（PRD-003 §3.1）
@@ -27,16 +101,31 @@ const I_EMOJI = { tool: '🔧', robot: '🤖', cmd: '⌘',   hermes: '◇', brai
 const I_ASCII = { tool: '[ ]', robot: '[C]', cmd: '[X]', hermes: '[H]', brain: '[T]', dot: '*', circle: '○', warn: '[!]', cog: '[*]', cross: '[x]', bye: '[bye]', wrench: '[F]', info: '[i]' };
 const I = supportsEmoji() ? I_EMOJI : I_ASCII;
 
-// 第一步：输入 API Key（带验证）
-async function stepApiKey(existing) {
+// 第一步：选择 provider。后续接入新 provider 只需在 registry 注册，向导自动展开。
+async function stepProvider(existing) {
+  const providers = providerRegistry.listProviders();
+  const providerId = await select({
+    message: '选择 Provider',
+    options: providers.map(provider => ({
+      value: provider.id,
+      label: provider.displayName,
+    })),
+    initialValue: existing || 'deepseek',
+  });
+  return isCancel(providerId) ? null : providerId;
+}
+
+// 第二步：输入 API Key（带验证）。校验走所选 provider 自己的 Anthropic 端点，不写死 DeepSeek。
+async function stepApiKey(provider, existing) {
   while (true) {
     const key = await text({
-      message: '请输入 DeepSeek API Key',
-      placeholder: 'sk-xxxxxxxxxxxxxxxx',
+      message: `请输入 ${provider.displayName} API Key`,
+      placeholder: provider.id === 'deepseek' ? 'sk-xxxxxxxxxxxxxxxx' : '请输入 API Key',
       initialValue: existing || '',
       validate(value) {
         if (!value.trim()) return '请输入 API Key';
-        if (!value.startsWith('sk-')) return 'API Key 应以 sk- 开头';
+        // sk- 前缀是 DeepSeek 专属约定，其它 provider 不强制
+        if (provider.id === 'deepseek' && !value.startsWith('sk-')) return 'DeepSeek API Key 应以 sk- 开头';
         return;
       },
     });
@@ -44,26 +133,27 @@ async function stepApiKey(existing) {
 
     const s = spinner();
     s.start('验证 API Key...');
-    const ok = await verifier.checkApiKey(key);
+    const ok = await verifier.checkApiKey(provider, key);
     if (ok) { s.stop('✅ API Key 验证通过'); return key; }
-    s.stop('❌ API Key 无效，请重新输入');
+    s.stop('❌ API Key 无效或网络异常，请重新输入');
   }
 }
 
-// 第二步：选择模型
-async function stepModel(existing) {
+// 第三步：选择模型。选项来自所选 provider 的 models，默认 defaultModel。
+async function stepModel(provider, existing) {
   const m = await select({
     message: '选择模型',
-    options: [
-      { value: 'deepseek-v4-pro', label: 'deepseek-v4-pro（推荐 — 最强推理）', hint: 'Pro' },
-      { value: 'deepseek-v4-flash', label: 'deepseek-v4-flash（快速响应）', hint: 'Flash' },
-    ],
-    initialValue: existing || 'deepseek-v4-pro',
+    options: provider.models.map(model => ({
+      value: model.id,
+      label: model.label || model.id,
+      hint: model.hint,
+    })),
+    initialValue: existing || provider.defaultModel || provider.models[0]?.id,
   });
   return isCancel(m) ? null : m;
 }
 
-// 第三步：选择思考等级
+// 第四步：选择思考等级
 async function stepThinking(existing) {
   const t = await select({
     message: '选择思考模式',
@@ -88,35 +178,60 @@ async function stepEffort(existing) {
   return isCancel(e) ? null : e;
 }
 
-// 第四步：确认配置
+// 第五步：确认配置
 async function stepConfirm(cfg) {
-  const thinkingText = cfg.thinking === 'disabled' ? '关闭' : `开启 (${cfg.effort})`;
+  const thinkingText = providerSupportsThinking(cfg)
+    ? (cfg.thinking === 'disabled' ? '关闭' : (providerSupportsThinkingEffort(cfg) ? `开启 (${cfg.effort})` : '开启'))
+    : '不支持';
+  const keyText = cfg.apiKey ? `${cfg.apiKey.slice(0, 7)}****` : '未配置';
   return confirm({
-    message: `确认配置？\n  模型: ${cfg.model}  |  思考模式: ${thinkingText}  |  API Key: ${cfg.apiKey.slice(0,7)}****`,
+    message: `确认配置？\n  Provider: ${providerName(cfg)}  |  模型: ${cfg.model}\n  思考模式: ${thinkingText}  |  API Key: ${keyText}`,
     initialValue: true,
   });
 }
 
-// 完整配置向导
+/**
+ * 完整配置向导
+ *
+ * 执行步骤：
+ * 1. 选 provider → 校验该 provider 的 API Key → 选该 provider 的模型
+ * 2. provider 支持 thinking 才问思考模式；支持 thinkingEffort 且开启思考才问深度
+ * 3. 用 buildProviderConfig 产出多 provider 归一化配置并写盘
+ *
+ * @param {object|null} existing - 现有配置（兼容旧版扁平结构）
+ * @returns {Promise<object|null>} 写盘后的归一化配置；用户取消返回 null
+ */
 async function configWizard(existing) {
-  intro(`${I.tool} DeepSeek × Claude Code — 首次配置`);
+  const normalized = configStore.normalizeConfig(existing);
+  intro(`${I.tool} Provider Gateway × Claude Code / Codex — 配置`);
 
-  const apiKey = await stepApiKey(existing?.apiKey);
+  const providerId = await stepProvider(normalized?.activeProvider || 'deepseek');
+  if (providerId === null) { outro('已取消'); return null; }
+
+  const provider = providerRegistry.getProvider(providerId);
+  const providerConfig = normalized?.providers?.[providerId] || {};
+
+  const apiKey = await stepApiKey(provider, providerConfig.apiKey || normalized?.apiKey);
   if (apiKey === null) { outro('已取消'); return null; }
 
-  const model = await stepModel(existing?.model);
+  const model = await stepModel(provider, providerConfig.model || normalized?.model);
   if (model === null) { outro('已取消'); return null; }
 
-  const thinking = await stepThinking(existing?.thinking || 'enabled');
-  if (thinking === null) { outro('已取消'); return null; }
+  // capability-aware：provider 不支持 thinking 直接跳过思考相关步骤
+  let thinking = 'disabled';
+  let effort = normalized?.effort || 'max';
+  if (provider.capabilities?.thinking !== false) {
+    thinking = await stepThinking(normalized?.thinking || 'enabled');
+    if (thinking === null) { outro('已取消'); return null; }
 
-  let effort = existing?.effort || 'max';
-  if (thinking === 'enabled') {
-    effort = await stepEffort(existing?.effort);
-    if (effort === null) { outro('已取消'); return null; }
+    // 仅在开启思考且 provider 支持 effort 档位时才问深度（zai/kimi thinkingEffort:false → 跳过）
+    if (thinking === 'enabled' && providerSupportsThinkingEffort({ activeProvider: providerId })) {
+      effort = await stepEffort(normalized?.effort);
+      if (effort === null) { outro('已取消'); return null; }
+    }
   }
 
-  const cfg = { apiKey, model, thinking, effort };
+  const cfg = buildProviderConfig(normalized, providerId, { apiKey, model, thinking, effort });
 
   if (!await stepConfirm(cfg)) {
     outro('已取消');
@@ -236,7 +351,7 @@ async function enableCodex(config, proxyManager, autostart, codexPatcher) {
     await ensureProxyRunning(config, proxyManager, autostart);
     s.message('✅ 代理已就绪');
     codexPatcher.patch(config);
-    s.stop('✅ Codex 已接入，直接执行 codex 即可使用 DeepSeek\n   💡 临时使用 OpenAI：codex -p openai');
+    s.stop(`✅ Codex 已接入，直接执行 codex 即可使用 ${providerName(configStore.normalizeConfig(config) || config)}\n   💡 临时使用 OpenAI：codex -p openai`);
     return true;
   } catch (err) {
     s.stop(`❌ Codex 接入失败: ${err.message}`);
@@ -268,7 +383,7 @@ async function enableHermes(config, proxyManager, autostart, hermesPatcher) {
     await ensureProxyRunning(config, proxyManager, autostart);
     s.message('✅ 代理已就绪');
     hermesPatcher.patch(config);
-    s.stop('✅ Hermes Agent 已接管到本地 DeepSeek 代理');
+    s.stop(`✅ Hermes Agent 已接管到本地代理（${providerName(configStore.normalizeConfig(config) || config)}）`);
     return true;
   } catch (err) {
     s.stop(`❌ Hermes Agent 接管失败: ${err.message}`);
@@ -364,19 +479,24 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
   await syncProxyOnStartup(config, proxyManager, autostart);
   await syncCodexPatchOnStartup(config, codexPatcher);
   while (true) {
+    // 归一化：把可能的旧扁平 config 兼容成多 provider 结构，让 config.model/effort/activeProvider 可靠
+    config = configStore.normalizeConfig(config) || config;
     config.thinking = config.thinking || 'enabled';
+    const thinkingSupported = providerSupportsThinking(config);
     const running = await proxyManager.isRunning();
     const claudePatched = settingsPatcher.isPatched();
     const codexPatched = codexPatcher?.isPatched?.() || false;
     const hermesAvailable = hermesPatcher?.isAvailable?.() || false;
     const hermesPatched = hermesPatcher?.isPatched?.() || false;
     const anyEnabled = claudePatched || codexPatched || hermesPatched;
-    const thinkingText = config.thinking === 'disabled' ? '关闭' : `开启 (${config.effort})`;
+    const thinkingText = thinkingSupported
+      ? (config.thinking === 'disabled' ? '关闭' : (providerSupportsThinkingEffort(config) ? `开启 (${config.effort})` : '开启'))
+      : '不支持';
 
     // 异常：有接入开启但代理没在跑（手动 kill 了代理或 LaunchAgent 没拉起来）
     const anomaly = anyEnabled && !running;
 
-    intro(`${I.tool} DeepSeek × Claude Code / Codex`);
+    intro(`${I.tool} Provider Gateway × Claude Code / Codex`);
     const claudeLine = `Claude Code: ${claudePatched ? `${I.dot} 已接入` : `${I.circle} 未接入`}`;
     const codexLine = `Codex:       ${codexPatched ? `${I.dot} 已接入 (直接 codex 即可使用)` : `${I.circle} 未接入`}`;
     const hermesLine = `Hermes:      ${hermesPatched ? `${I.dot} 已接管` : (hermesAvailable ? `${I.circle} 可接管` : `${I.circle} 未发现 config.yaml`)}`;
@@ -384,7 +504,7 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
       ? `代理:        ${I.warn} 接入已开但代理未运行`
       : (running ? `代理:        ${I.dot} 127.0.0.1:17861` : `代理:        ${I.circle} 未运行`);
     note(
-      `${claudeLine}\n${codexLine}\n${hermesLine}\n${proxyLine}\n模型: ${config.model}  |  思考模式: ${thinkingText}`
+      `${claudeLine}\n${codexLine}\n${hermesLine}\n${proxyLine}\nProvider: ${providerName(config)}  |  模型: ${config.model}  |  思考模式: ${thinkingText}`
     );
 
     const options = [];
@@ -408,10 +528,12 @@ async function mainPanel(config, proxyManager, autostart, settingsPatcher, codex
       });
       options.push({ value: 'diagnose-hermes', label: `${I.info} Hermes Agent 诊断` });
     }
-    options.push({
-      value: 'toggle-thinking',
-      label: config.thinking === 'disabled' ? `${I.brain} 开启思考模式` : `${I.brain} 关闭思考模式`,
-    });
+    if (thinkingSupported) {
+      options.push({
+        value: 'toggle-thinking',
+        label: config.thinking === 'disabled' ? `${I.brain} 开启思考模式` : `${I.brain} 关闭思考模式`,
+      });
+    }
     options.push({ value: 'reconfig', label: `${I.cog} 修改配置` });
     options.push({ value: 'quit', label: `${I.cross} 退出` });
 
@@ -472,4 +594,8 @@ module.exports = {
   enableHermes,
   disableHermes,
   diagnoseHermes,
+  buildProviderConfig,
+  providerName,
+  providerSupportsThinking,
+  providerSupportsThinkingEffort,
 };
