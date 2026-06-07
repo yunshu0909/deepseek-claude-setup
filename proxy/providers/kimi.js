@@ -48,11 +48,11 @@ const kimi = gateway.attachAdapter({
   id: 'kimi',
   displayName: 'Kimi (Moonshot)',
   defaultModel: DEFAULT_MODEL,
+  // 模型名据 2026-06-07 真打 api.moonshot.cn /v1/models 校正：本账号仅 kimi-k2.6 / kimi-k2.5
+  // 可用（旧的 kimi-k2-thinking / kimi-k2-turbo-preview 已 404 下线）。
   models: [
     { id: 'kimi-k2.6', label: 'kimi-k2.6（旗舰，编码/Agent）', hint: '推荐' },
-    { id: 'kimi-k2.5', label: 'kimi-k2.5（均衡）' },
-    { id: 'kimi-k2-thinking', label: 'kimi-k2-thinking（思考专用）' },
-    { id: 'kimi-k2-turbo-preview', label: 'kimi-k2-turbo-preview（快速）' },
+    { id: 'kimi-k2.5', label: 'kimi-k2.5（均衡/轻量）' },
   ],
   defaults: DEFAULTS,
   capabilities: {

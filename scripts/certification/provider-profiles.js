@@ -141,7 +141,7 @@ const PROFILES = {
     releaseBranch: 'codex/v1.6.1-providers',
     apiKeyEnv: 'MOONSHOT_API_KEY',
     defaultModel: 'kimi-k2.6',
-    flashModel: 'kimi-k2-turbo-preview',
+    flashModel: 'kimi-k2.5',
     thinkingEfforts: [], // Kimi 无 effort 档（adapter thinkingEffort:false）；effort 类断言以真测为准
     stages: STAGES,
     testCases: TEST_CASES,
