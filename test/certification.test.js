@@ -56,7 +56,7 @@ function check(name, fn) {
 
 function platformContext(platform) {
   const base = collectPlatformContext();
-  const shared = { ...base, branch: 'codex/v1.6.0-deepseek-gateway', commit: 'fixture123', runnerId: `fixture-${platform}` };
+  const shared = { ...base, branch: 'main', commit: 'fixture123', runnerId: `fixture-${platform}` };
   if (platform === 'win32') return { ...shared, platform, osType: 'Windows_NT', osRelease: '10.0.22631', nodeExecPath: 'C:\\nodejs\\node.exe' };
   if (platform === 'linux') return { ...shared, platform, osType: 'Linux', osRelease: '6.8.0-linux', nodeExecPath: '/usr/bin/node' };
   return { ...shared, platform: 'darwin', osType: 'Darwin', osRelease: '25.2.0', nodeExecPath: '/opt/homebrew/bin/node' };

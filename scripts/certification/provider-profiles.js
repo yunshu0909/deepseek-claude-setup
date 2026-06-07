@@ -102,7 +102,7 @@ const PROFILES = {
   deepseek: {
     id: 'deepseek',
     displayName: 'DeepSeek',
-    releaseBranch: 'codex/v1.6.0-deepseek-gateway',
+    releaseBranch: 'main',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
     defaultModel: 'deepseek-v4-pro',
     flashModel: 'deepseek-v4-flash',
