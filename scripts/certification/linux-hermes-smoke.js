@@ -41,7 +41,7 @@ function buildLinuxScript(env) {
     'export DEEPSEEK_CLAUDE_LOG_PATH="$CERT_TMP/gateway.log"',
     'mkdir -p "$DEEPSEEK_CLAUDE_CONFIG_DIR"',
     'node -e \'require("./src/config-store").write({apiKey:process.env.DEEPSEEK_API_KEY,model:"deepseek-v4-pro",thinking:"enabled",effort:"max"})\'',
-    'cp proxy/proxy.js "$DEEPSEEK_CLAUDE_CONFIG_DIR/proxy.js"',
+    'cp -r proxy/. "$DEEPSEEK_CLAUDE_CONFIG_DIR/"',
     'node -e \'require("./src/hermes-patcher").patch({model:"deepseek-v4-pro",thinking:"enabled",effort:"max"})\'',
     '"${SYSTEMD_RUN[@]}" --unit="$UNIT" --collect --property=Restart=no --setenv="DEEPSEEK_CLAUDE_CONFIG_DIR=$DEEPSEEK_CLAUDE_CONFIG_DIR" --setenv="DEEPSEEK_CLAUDE_PROXY_PORT=$DEEPSEEK_CLAUDE_PROXY_PORT" --setenv="DEEPSEEK_CLAUDE_LOG_PATH=$DEEPSEEK_CLAUDE_LOG_PATH" node "$DEEPSEEK_CLAUDE_CONFIG_DIR/proxy.js"',
     '"${SYSTEMCTL[@]}" is-active "$UNIT"',
