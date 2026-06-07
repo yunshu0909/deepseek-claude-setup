@@ -1,26 +1,26 @@
 {
   "providerId": "deepseek",
   "mode": "true-key",
-  "runId": "1780822093142-3e3974",
+  "runId": "1780825074831-937959",
   "effort": "max",
   "model": "deepseek-v4-pro",
   "thinking": "enabled",
   "status": "PASS",
   "passed": true,
-  "startedAt": "2026-06-07T08:48:13.142Z",
-  "finishedAt": "2026-06-07T08:48:28.334Z",
+  "startedAt": "2026-06-07T09:37:54.831Z",
+  "finishedAt": "2026-06-07T09:39:51.205Z",
   "versions": {
-    "codex": "codex-cli 0.137.0-alpha.4"
+    "claude": "2.1.168 (Claude Code)"
   },
   "cases": [
     {
-      "name": "codex-tool",
+      "name": "claude-long",
       "model": "deepseek-v4-pro",
       "status": "PASS",
       "evidenceType": "true-key",
-      "durationMs": 14887,
-      "positiveAssertions": 7,
-      "marker": "CODEX_TOOL_PASS:client-e2e-codex-tool-1780822093142-3e3974",
+      "durationMs": 115539,
+      "positiveAssertions": 9,
+      "marker": "ALL TESTS PASS",
       "gatewayHealth": {
         "service": "deepseek-claude-proxy",
         "ok": true,
@@ -29,32 +29,72 @@
         "thinking": "enabled",
         "effort": "max"
       },
-      "gatewayEffortLogMatched": true,
       "gatewayFieldsMatched": true,
       "workspaceFiles": [
-        ".git",
+        "certification-blackbox.test.js",
         "package.json",
-        "shell-proof.txt"
+        "test.js",
+        "todo.js",
+        "todo.json"
       ],
       "workspaceSnapshot": [
         {
-          "file": "package.json",
-          "bytes": 58,
-          "sha256": "402f27e4f1ed48080e3588f1b40398fe302ae801f1f7c719f749623d17f53435",
-          "text": "{\n  \"name\": \"client-e2e-codex-tool-1780822093142-3e3974\"\n}"
+          "file": "certification-blackbox.test.js",
+          "bytes": 1386,
+          "sha256": "79710c705ba75894651ea4219a88849992fba8d275802747de0dfd6be9130c23",
+          "text": "const assert = require('assert');\nconst fs = require('fs');\nconst cp = require('child_process');\nfunction lines(text) { return text.trim().split(/\\r?\\n/).filter(Boolean); }\nfunction hasId(line, id) { return new RegExp(`(^|\\\\D)${id}(\\\\D|$)`).test(line); }\nfunction assertTodoLine(line, id, task, done) {\n  assert(line.includes(task), `missing task ${task}: ${line}`);\n  assert(hasId(line, id), `missing id ${id}: ${line}`);\n  const doneMarker = /\\[x\\]|\\[done\\]|✓|✔|✅/i.test(line);\n  const openMarker = /\\[\\s\\]|☐|○/i.test(line);\n  assert.strictEqual(doneMarker, done, `done marker mismatch: ${line}`);\n  if (!done) assert(openMarker, `missing open marker: ${line}`);\n}\ntry { fs.unlinkSync('todo.json'); } catch {}\ncp.execFileSync(process.execPath, ['todo.js', 'add', '写文档']);\ncp.execFileSync(process.execPath, ['todo.js', 'add', '修bug']);\nlet list = lines(cp.execFileSync(process.execPath, ['todo.js', 'list'], {encoding:'utf8'}));\nassert.strictEqual(list.length, 2);\nassertTodoLine(list[0], 1, '写文档', false);\nassertTodoLine(list[1], 2, '修bug', false);\ncp.execFileSync(process.execPath, ['todo.js', 'done', '1']);\nlist = lines(cp.execFileSync(process.execPath, ['todo.js', 'list'], {encoding:'utf8'}));\nassert.strictEqual(list.length, 2);\nassertTodoLine(list[0], 1, '写文档', true);\nassertTodoLine(list[1], 2, '修bug', false);\nconsole.log('ALL TESTS PASS');\n"
         },
         {
-          "file": "shell-proof.txt",
-          "bytes": 43,
-          "sha256": "daca7194ddf8b0f44f52bd89d81fe70915c97dabe18b9f4ac61fd4a2e49a846f",
-          "text": "client-e2e-codex-tool-1780822093142-3e3974\n"
+          "file": "package.json",
+          "bytes": 59,
+          "sha256": "ff23012b7c5a725770fc4061f1213eb6fddf07c4ffa082d9aad8c123418f40d5",
+          "text": "{\n  \"name\": \"client-e2e-claude-long-1780825074831-937959\"\n}"
+        },
+        {
+          "file": "test.js",
+          "bytes": 1330,
+          "sha256": "d4237b75c0b14db1faa07d4bb73dcad1b748be1ecc927a2c3d1db80d17c69898",
+          "text": "const assert = require('assert');\nconst { execSync } = require('child_process');\nconst fs = require('fs');\nconst path = require('path');\n\nconst TODO_JS = path.join(__dirname, 'todo.js');\nconst TODO_JSON = path.join(__dirname, 'todo.json');\n\ntry { fs.unlinkSync(TODO_JSON); } catch (e) {}\n\nfunction run(cmd) {\n  return execSync(`node \"${TODO_JS}\" ${cmd}`, { encoding: 'utf8' }).trim();\n}\n\nrun('add \"Buy milk\"');\nrun('add \"Walk dog\"');\n\nlet output = run('list');\nlet lines = output.split('\\n');\nassert.strictEqual(lines.length, 2);\nassert.match(lines[0], /^1\\.\\s+\\[ \\]\\s+Buy milk$/);\nassert.match(lines[1], /^2\\.\\s+\\[ \\]\\s+Walk dog$/);\n\nrun('done 1');\n\noutput = run('list');\nlines = output.split('\\n');\nassert.match(lines[0], /^1\\.\\s+\\[x\\]\\s+Buy milk$/);\nassert.match(lines[1], /^2\\.\\s+\\[ \\]\\s+Walk dog$/);\n\nconst raw = fs.readFileSync(TODO_JSON, 'utf8');\nconst data = JSON.parse(raw);\nassert(Array.isArray(data));\nassert.strictEqual(data.length, 2);\nassert.strictEqual(data[0].text, 'Buy milk');\nassert.strictEqual(data[0].done, true);\nassert.strictEqual(data[1].text, 'Walk dog');\nassert.strictEqual(data[1].done, false);\n\nconst todoJsContent = fs.readFileSync(TODO_JS, 'utf8');\nassert(todoJsContent.includes('add'));\nassert(todoJsContent.includes('list'));\nassert(todoJsContent.includes('done'));\n\nconsole.log('ALL TESTS PASS');\n"
+        },
+        {
+          "file": "todo.js",
+          "bytes": 1216,
+          "sha256": "8b309c5715dbab16ba942878d735524865e97360d263686704221284529eaa5f",
+          "text": "#!/usr/bin/env node\nconst fs = require('fs');\nconst path = require('path');\n\nconst DATA_FILE = path.join(__dirname, 'todo.json');\n\nfunction readTodos() {\n  try {\n    const data = fs.readFileSync(DATA_FILE, 'utf8');\n    return JSON.parse(data);\n  } catch (e) {\n    return [];\n  }\n}\n\nfunction writeTodos(todos) {\n  fs.writeFileSync(DATA_FILE, JSON.stringify(todos, null, 2));\n}\n\nconst [, , cmd, ...args] = process.argv;\nconst todos = readTodos();\n\nswitch (cmd) {\n  case 'add': {\n    const text = args.join(' ');\n    if (!text) {\n      console.error('Usage: todo add <task>');\n      process.exit(1);\n    }\n    todos.push({ text, done: false });\n    writeTodos(todos);\n    break;\n  }\n  case 'list': {\n    todos.forEach((todo, i) => {\n      const marker = todo.done ? '[x]' : '[ ]';\n      console.log(`${i + 1}. ${marker} ${todo.text}`);\n    });\n    break;\n  }\n  case 'done': {\n    const index = parseInt(args[0], 10);\n    if (isNaN(index) || index < 1 || index > todos.length) {\n      console.error('Usage: todo done <index>');\n      process.exit(1);\n    }\n    todos[index - 1].done = true;\n    writeTodos(todos);\n    break;\n  }\n  default:\n    console.error('Usage: todo <add|list|done> [args]');\n    process.exit(1);\n}\n"
+        },
+        {
+          "file": "todo.json",
+          "bytes": 102,
+          "sha256": "e078e2054499f91eed8b7c13d7401611e4d21bbb13e252fa092625e249f44b44",
+          "text": "[\n  {\n    \"text\": \"写文档\",\n    \"done\": true\n  },\n  {\n    \"text\": \"修bug\",\n    \"done\": false\n  }\n]"
         }
       ],
-      "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"019ea144-aebe-72d2-a1c2-41969a6aaa8a\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.started\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc \\\"cat ./package.json | python3 -c \\\\\\\"import sys,json; print(json.load(sys.stdin)['name'])\\\\\\\"\\\"\",\"aggregated_output\":\"\",\"exit_code\":null,\"status\":\"in_progress\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc \\\"cat ./package.json | python3 -c \\\\\\\"import sys,json; print(json.load(sys.stdin)['name'])\\\\\\\"\\\"\",\"aggregated_output\":\"client-e2e-codex-tool-1780822093142-3e3974\\n\",\"exit_code\":0,\"status\":\"completed\"}}\n{\"type\":\"item.started\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc 'echo \\\"client-e2e-codex-tool-1780822093142-3e3974\\\" > shell-proof.txt'\",\"aggregated_output\":\"\",\"exit_code\":null,\"status\":\"in_progress\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc 'echo \\\"client-e2e-codex-tool-1780822093142-3e3974\\\" > shell-proof.txt'\",\"aggregated_output\":\"\",\"exit_code\":0,\"status\":\"completed\"}}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"agent_message\",\"text\":\"CODEX_TOOL_PASS:client-e2e-codex-tool-1780822093142-3e3974\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":24614,\"cached_input_tokens\":0,\"output_tokens\":399,\"reasoning_output_tokens\":0}}\n",
-      "stderr": "Reading additional input from stdin...\n",
-      "lastMessage": "CODEX_TOOL_PASS:client-e2e-codex-tool-1780822093142-3e3974",
-      "logSummary": "3] RESPONSES_TOOLS count=5 names=[exec_command,write_stdin,update_plan,request_user_input,view_image]\n[08:48:13] RESPONSES stream=stream model=deepseek-v4-pro msgs=4 tools=true thinking=enabled effort=max input=[message:developer,message:user,message:user]\n[08:48:19] RESPONSES_DONE id=resp_1780822093530 effort=max thinking=Y(198chars) text=0chars tools=1 usage=7958/192 6093ms\n[08:48:19] RESPONSES_TOOLS count=5 names=[exec_command,write_stdin,update_plan,request_user_input,view_image]\n[08:48:19] RESPONSES stream=stream model=deepseek-v4-pro msgs=6 tools=true thinking=enabled effort=max input=[message:developer,message:user,message:user,reasoning,function_call,function_call_output]\n[08:48:23] RESPONSES_DONE id=resp_1780822099723 effort=max thinking=Y(102chars) text=0chars tools=1 usage=8219/171 3689ms\n[08:48:23] RESPONSES_TOOLS count=5 names=[exec_command,write_stdin,update_plan,request_user_input,view_image]\n[08:48:23] RESPONSES stream=stream model=deepseek-v4-pro msgs=8 tools=true thinking=enabled effort=max input=[message:developer,message:user,message:user,reasoning,function_call,function_call_output,reasoning,function_call,function_call_output]\n[08:48:26] RESPONSES_DONE id=resp_1780822103459 effort=max thinking=Y(41chars) text=58chars tools=0 usage=8437/36 2615ms\n",
-      "proof": "client-e2e-codex-tool-1780822093142-3e3974"
+      "stdout": "ALL TESTS PASS\n",
+      "stderr": "",
+      "logSummary": "5] POST /v1/messages?beta=true | model=deepseek-v4-pro->deepseek-v4-pro | thinking=enabled | effort=max\n[09:39:47] MSG_DONE model=deepseek-v4-pro thinking=Y(21841chars) text=0chars stream=true usage=1044/6865 112331ms\n[09:39:47] POST /v1/messages?beta=true | model=deepseek-v4-pro->deepseek-v4-pro | thinking=enabled | effort=max\n[09:39:50] MSG_DONE model=deepseek-v4-pro thinking=Y(172chars) text=14chars stream=true usage=117/44 2645ms\n",
+      "modelSelfTest": {
+        "status": 0,
+        "code": 0,
+        "durationMs": 293,
+        "stdout": "ALL TESTS PASS\n",
+        "stderr": "",
+        "timedOut": false
+      },
+      "blackboxRetest": {
+        "status": 0,
+        "code": 0,
+        "durationMs": 265,
+        "stdout": "ALL TESTS PASS\n",
+        "stderr": "",
+        "timedOut": false
+      },
+      "staticChecks": {
+        "usesAssert": true,
+        "readsTodoJs": true,
+        "readsTodoJson": true
+      },
+      "toolRounds": 2,
+      "requiredFiles": true
     }
   ],
   "gatewayHealth": {
@@ -71,7 +111,7 @@
     "effort": "max"
   },
   "gatewayHealthPassed": true,
-  "positiveAssertions": 7,
+  "positiveAssertions": 9,
   "configSnapshots": {
     "before": {
       "~/.claude/settings.json": {

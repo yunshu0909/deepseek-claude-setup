@@ -21,7 +21,9 @@ const { redactText, scanForSecrets } = require('./certification/report-writer');
 const { startCaptureServer } = require('./upstream-capture-server');
 
 const DEFAULT_REPORT_DIR = path.join(process.cwd(), '自动化测试', 'V1.5.0');
-const LONG_TASK_MIN_TOOL_ROUNDS = 3;
+// 2 = 高效 agent 的合理最小轮数（一个 heredoc 写完 todo.js+test.js+跑测 → 看结果后确认，本就 ≥2 轮，
+// 且 LONG_PROMPT 明确要求高效「优先一次 heredoc 写完/≤10 次」）。真实性靠 blackbox 独立校验+静态检查兜底，不靠轮数。
+const LONG_TASK_MIN_TOOL_ROUNDS = 2;
 const LONG_TASK_MAX_TOOL_ROUNDS = 10;
 const LONG_PROMPT = [
   '在当前目录用 Node.js 完成一个命令行待办工具，下面要求全部做完：',

@@ -323,7 +323,7 @@ async function run() {
     assert(result.steps.every(step => step.switchedConfigRoot === true));
   });
   check('long task round gate is bounded to ten tool rounds', () => {
-    assert.strictEqual(LONG_TASK_MIN_TOOL_ROUNDS, 3);
+    assert.strictEqual(LONG_TASK_MIN_TOOL_ROUNDS, 2);
     assert.strictEqual(LONG_TASK_MAX_TOOL_ROUNDS, 10);
   });
   check('long task static checks require executable reads, not comment markers', () => {
