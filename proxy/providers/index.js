@@ -10,10 +10,14 @@
  */
 
 const deepseek = require('./deepseek');
+const zai = require('./zai');
+const kimi = require('./kimi');
 
-// v1.6.0：只注册 deepseek（智谱/Kimi 顺延 v1.6.1+，见 PRD-016 §4.2 不接新 provider）。
+// v1.6.1：接入智谱 BigModel + Kimi（Moonshot）。全部走 gateway 能力声明驱动，核心层 0 provider id 分支。
 const PROVIDERS = {
   [deepseek.id]: deepseek,
+  [zai.id]: zai,
+  [kimi.id]: kimi,
 };
 
 /**
