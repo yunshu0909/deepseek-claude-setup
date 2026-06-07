@@ -76,15 +76,17 @@ async function runSmoke(options = {}) {
 
   const tmpRoot = makeTempRoot('deepseek-provider-smoke-');
   const port = randomPort();
+  const smokeModel = modelFromName(options.model || process.env.PROVIDER_SMOKE_MODEL || profile.defaultModel);
+  // v1.6.1：多 provider 配置——apiKey/model 必须落在 providers.[id]（顶层会被 runtime-config 归一成 deepseek）。
   const config = {
-    apiKey,
-    model: modelFromName(options.model || process.env.PROVIDER_SMOKE_MODEL || profile.defaultModel),
+    activeProvider: providerId,
+    providers: { [providerId]: { apiKey, model: smokeModel } },
     thinking: options.thinking || process.env.PROVIDER_SMOKE_THINKING || 'enabled',
     effort: options.effort || process.env.PROVIDER_SMOKE_EFFORT || 'max',
   };
   const result = {
     providerId,
-    model: config.model,
+    model: smokeModel,
     thinking: config.thinking,
     effort: config.effort,
     status: 'FAIL',
@@ -101,9 +103,11 @@ async function runSmoke(options = {}) {
       thinking: health.json?.thinking,
       effort: health.json?.effort,
     };
-    if (health.json?.model !== config.model) throw new Error(`health model mismatch: ${health.body}`);
+    if (health.json?.model !== smokeModel) throw new Error(`health model mismatch: ${health.body}`);
     if (health.json?.thinking !== config.thinking) throw new Error(`health thinking mismatch: ${health.body}`);
-    const expectedEffort = config.thinking === 'disabled' ? null : config.effort;
+    // zai/kimi 等无 effort 档 provider（profile.thinkingEfforts 为空）→ 网关正确报告 effort=null
+    const hasEffortTiers = (profile.thinkingEfforts || []).length > 0;
+    const expectedEffort = (config.thinking === 'disabled' || !hasEffortTiers) ? null : config.effort;
     if ((health.json?.effort ?? null) !== expectedEffort) throw new Error(`health effort mismatch: ${health.body}`);
     result.positiveAssertions += 3;
 

@@ -860,7 +860,7 @@ async function runTrueKeyClient(options = {}) {
   const before = snapshotUserConfigs();
   let proxy = null;
   try {
-    proxy = await startProxy({ tmpRoot, port: ctx.port, logPath: ctx.logPath, config: { apiKey, model, thinking, effort } });
+    proxy = await startProxy({ tmpRoot, port: ctx.port, logPath: ctx.logPath, config: { activeProvider: provider.id, providers: { [provider.id]: { apiKey, model } }, thinking, effort } });
     ctx.gatewayHealth = proxy.health;
     ctx.gatewayHealthPassed = healthMatches(ctx, proxy.health);
     for (const target of targets) {
