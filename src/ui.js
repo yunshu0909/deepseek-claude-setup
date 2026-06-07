@@ -133,20 +133,11 @@ async function configWizard(existing) {
  * @returns {boolean} true 表示文件被更新（首次部署或内容变化），false 表示已是最新无需更新
  */
 function deployProxyScript() {
-  const fs = require('fs');
   const path = require('path');
-  const src = path.join(__dirname, '..', 'proxy', 'proxy.js');
-  const dst = path.join(configStore.DIR, 'proxy.js');
-  fs.mkdirSync(path.dirname(dst), { recursive: true });
-
-  // 内容比对避免不必要的 restart：包升级后才会触发文件变化
-  const newContent = fs.readFileSync(src, 'utf-8');
-  let oldContent = '';
-  try { oldContent = fs.readFileSync(dst, 'utf-8'); } catch {}
-  if (oldContent === newContent) return false;
-
-  fs.writeFileSync(dst, newContent);
-  return true;
+  const proxyBundle = require('./proxy-bundle');
+  // v1.6.0：proxy 是多文件 bundle，用原子部署（staging→require-smoke→逐文件 rename→manifest 最后写）。
+  const src = path.join(__dirname, '..', 'proxy');
+  return proxyBundle.deployProxyBundle(configStore.DIR, src).changed;
 }
 
 /**
@@ -312,16 +303,11 @@ async function diagnoseHermes(proxyManager, autostart, hermesPatcher) {
  */
 async function syncProxyOnStartup(config, proxyManager, autostart) {
   if (!await proxyManager.isRunning()) return false;
-  const fs = require('fs');
   const path = require('path');
-  const src = path.join(__dirname, '..', 'proxy', 'proxy.js');
-  const dst = path.join(configStore.DIR, 'proxy.js');
-  let needsUpdate = false;
-  try {
-    const newC = fs.readFileSync(src, 'utf-8');
-    const oldC = fs.readFileSync(dst, 'utf-8');
-    needsUpdate = newC !== oldC;
-  } catch {}
+  const proxyBundle = require('./proxy-bundle');
+  const src = path.join(__dirname, '..', 'proxy');
+  // v1.6.0：bundle 任一文件变化即视为需升级（isBundleCurrent 比对 manifest + 全文件 sha256）。
+  const needsUpdate = !proxyBundle.isBundleCurrent(configStore.DIR, src);
   if (!needsUpdate) return false;
   const s = spinner();
   s.start('检测到 proxy 已升级，正在重启代理使用最新代码...');
