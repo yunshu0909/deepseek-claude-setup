@@ -122,7 +122,9 @@ function handleResponses(req, res, payload) {
     tools,
     thinking,
     effort: resolvedEffort(),
-    stream: payload.stream !== false,
+    // Codex Responses 路径上游必须流式（codex-responses 解析 SSE delta）；客户端 stream:false 由下面
+    // streamMode='json' 单独聚合，绝不能把 stream:false 透传给上游（否则 DeepSeek 返回非 SSE → empty_stream）。对齐 v1.5.0。
+    stream: true,
   });
 
   const provider = activeProviderDefinition();
