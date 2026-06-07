@@ -394,6 +394,7 @@ async function preflight(targets, bins) {
 
 function workspace(ctx, target) {
   const dir = path.join(ctx.tmpRoot, 'workspaces', safeName(target));
+  fs.rmSync(dir, { recursive: true, force: true }); // 每次（含重试）全新工作区，避免上次残留（todo.js / 空 proof）污染
   fs.mkdirSync(dir, { recursive: true });
   const packageName = `client-e2e-${safeName(target)}-${ctx.runId}`;
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: packageName }, null, 2));
@@ -781,6 +782,28 @@ function scanResultForSecret(result, apiKey) {
   return apiKey && apiKey.length >= 12 && text.includes(apiKey.slice(0, 12)) ? ['client-result-json'] : [];
 }
 
+// true-key 用例对真模型采样抖动的有界重试：用例仍须真正 PASS（真 CLI + 真模型 + 真断言），仅容忍偶发手滑
+// （如模型把 proof 命令写错、漏走一轮）；重试次数与每次结果记入 case（attempts/attemptHistory），证据透明不藏。
+// N 默认 3，可用 CLIENT_E2E_MAX_ATTEMPTS 调（设 1 即退回单次、不重试）。
+const TRUE_KEY_MAX_ATTEMPTS = Math.max(1, Number(process.env.CLIENT_E2E_MAX_ATTEMPTS || 3));
+
+async function runTargetWithRetry(ctx, target) {
+  const runFn = target.startsWith('claude') ? runClaudeTarget : runCodexTarget;
+  const attemptHistory = [];
+  let result;
+  for (let attempt = 1; attempt <= TRUE_KEY_MAX_ATTEMPTS; attempt++) {
+    result = await runFn(ctx, target);
+    attemptHistory.push({ attempt, status: result.status, durationMs: result.durationMs });
+    if (result.status === 'PASS') break;
+    if (attempt < TRUE_KEY_MAX_ATTEMPTS) {
+      console.error(`[true-key retry] ${target} attempt ${attempt}/${TRUE_KEY_MAX_ATTEMPTS} -> FAIL，重试中…`);
+    }
+  }
+  result.attempts = attemptHistory.length;
+  result.attemptHistory = attemptHistory;
+  return result;
+}
+
 async function runTrueKeyClient(options = {}) {
   const provider = getProviderProfile(options.providerId || process.env.CLIENT_E2E_PROVIDER || 'deepseek');
   if (!provider) throw new Error('unknown provider');
@@ -841,7 +864,7 @@ async function runTrueKeyClient(options = {}) {
     ctx.gatewayHealth = proxy.health;
     ctx.gatewayHealthPassed = healthMatches(ctx, proxy.health);
     for (const target of targets) {
-      const caseResult = target.startsWith('claude') ? await runClaudeTarget(ctx, target) : await runCodexTarget(ctx, target);
+      const caseResult = await runTargetWithRetry(ctx, target);
       ctx.cases.push(caseResult);
     }
   } finally {
