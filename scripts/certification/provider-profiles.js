@@ -120,6 +120,36 @@ const PROFILES = {
       linux: ['TC-044'],
     },
   },
+  zai: {
+    id: 'zai',
+    displayName: '智谱 BigModel',
+    releaseBranch: 'main',
+    apiKeyEnv: 'ZHIPU_API_KEY',
+    defaultModel: 'glm-5.1',
+    flashModel: 'glm-5-turbo',
+    thinkingEfforts: [], // 智谱无 effort 档（adapter thinkingEffort:false）；effort 类断言以真测为准
+    stages: STAGES,
+    testCases: TEST_CASES,
+    requiredPlatforms: ['darwin', 'win32', 'linux'],
+    requiredTrueKeyCases: TEST_CASES.filter(tc => tc.priority === 'P0' && tc.evidenceType === 'true-key').map(tc => tc.id),
+    requiredP0Cases: TEST_CASES.filter(tc => tc.priority === 'P0').map(tc => tc.id),
+    platformOnlyCases: { linux: ['TC-044'] },
+  },
+  kimi: {
+    id: 'kimi',
+    displayName: 'Kimi (Moonshot)',
+    releaseBranch: 'main',
+    apiKeyEnv: 'MOONSHOT_API_KEY',
+    defaultModel: 'kimi-k2.6',
+    flashModel: 'kimi-k2-turbo-preview',
+    thinkingEfforts: [], // Kimi 无 effort 档（adapter thinkingEffort:false）；effort 类断言以真测为准
+    stages: STAGES,
+    testCases: TEST_CASES,
+    requiredPlatforms: ['darwin', 'win32', 'linux'],
+    requiredTrueKeyCases: TEST_CASES.filter(tc => tc.priority === 'P0' && tc.evidenceType === 'true-key').map(tc => tc.id),
+    requiredP0Cases: TEST_CASES.filter(tc => tc.priority === 'P0').map(tc => tc.id),
+    platformOnlyCases: { linux: ['TC-044'] },
+  },
 };
 
 /**
