@@ -6,7 +6,7 @@
     "deepseek-claude-setup": "./cli.js"
   },
   "scripts": {
-    "test": "node test.js && node test/hermes-target.test.js && node test/certification.test.js && node test/proxy-bundle.test.js",
+    "test": "node test.js && node test/config-wizard-flow.test.js && node test/hermes-target.test.js && node test/certification.test.js && node test/proxy-bundle.test.js",
     "smoke:provider": "node scripts/provider-smoke.js",
     "e2e:clients": "node scripts/client-e2e.js",
     "smoke:hermes-linux": "node scripts/certification/linux-hermes-smoke.js",

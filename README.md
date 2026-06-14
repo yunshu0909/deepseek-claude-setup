@@ -342,7 +342,7 @@ Windows 报告可由 Windows 真机单独生成后人工合并；release gate �
 npm test
 ```
 
-141 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、自定义模型 ID 保存与完整 CRUD、Kimi K2.7 Code thinking 与 Codex 长工具预算规则、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 provider certification 的报告、release gate、capability-aware capture runner、true-key runner、Linux Hermes runner、认证 runner stdio 兜底和 tokenUsage 汇总。
+145 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、自定义模型 ID 保存与完整 CRUD、配置向导全流程、Kimi K2.7 Code thinking 与 Codex 长工具预算规则、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 provider certification 的报告、release gate、capability-aware capture runner、true-key runner、Linux Hermes runner、认证 runner stdio 兜底和 tokenUsage 汇总。
 
 测试使用临时目录 + 本地假 DeepSeek 上游，**不调用真实 API，不修改真实 `~/.claude` / `~/.codex` / Hermes 配置**。
 

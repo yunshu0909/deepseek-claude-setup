@@ -299,10 +299,10 @@ async function configWizard(existing) {
   const provider = providerRegistry.getProvider(providerId);
   const providerConfig = normalized?.providers?.[providerId] || {};
 
-  const apiKey = await stepApiKey(provider, providerConfig.apiKey || normalized?.apiKey);
+  const apiKey = await stepApiKey(provider, providerConfig.apiKey);
   if (apiKey === null) { outro('已取消'); return null; }
 
-  const modelChoice = await stepModel(provider, providerConfig.model || normalized?.model, providerConfig.customModels);
+  const modelChoice = await stepModel(provider, providerConfig.model, providerConfig.customModels);
   if (modelChoice === null) { outro('已取消'); return null; }
 
   // capability-aware：provider 不支持 thinking 直接跳过思考相关步骤
