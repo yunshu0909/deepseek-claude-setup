@@ -25,6 +25,7 @@ const providerRegistry = require('./providers');
 const runtimeConfig = require('./runtime-config');
 const gateway = require('./gateway');
 const codexResponses = require('./clients/codex-responses');
+const { formatUsageForLog, normalizeUsage } = require('./usage');
 
 const CONFIG_DIR = process.env.DEEPSEEK_CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.deepseek-claude');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
@@ -229,10 +230,40 @@ function handleChatCompletions(req, res, payload) {
         return;
       }
       res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+      const isStream = (upstreamRes.headers['content-type'] || '').includes('event-stream');
+      let rawUsage = null;
+      let lineBuf = '';
+      let jsonBuf = '';
+      upstreamRes.on('data', chunk => {
+        const text = chunk.toString('utf8');
+        if (isStream) {
+          lineBuf += text;
+          const lines = lineBuf.split(/\r?\n/);
+          lineBuf = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trim();
+            if (!data || data === '[DONE]') continue;
+            try {
+              const evt = JSON.parse(data);
+              if (evt.usage) rawUsage = { ...(rawUsage || {}), ...evt.usage };
+            } catch {}
+          }
+        } else if (jsonBuf.length < 2 * 1024 * 1024) {
+          jsonBuf += text;
+        }
+      });
       upstreamRes.on('end', () => {
+        if (!isStream && jsonBuf) {
+          try {
+            const j = JSON.parse(jsonBuf);
+            if (j.usage) rawUsage = { ...(rawUsage || {}), ...j.usage };
+          } catch {}
+        }
+        const normalizedUsage = normalizeUsage(rawUsage);
         const elapsed = Date.now() - started;
         const level = upstreamRes.statusCode >= 400 ? 'CHAT_FAILED' : 'CHAT_DONE';
-        log(`${level} model=${body.model} stream=${body.stream !== false} status=${upstreamRes.statusCode} ${elapsed}ms`);
+        log(`${level} model=${body.model} stream=${body.stream !== false} status=${upstreamRes.statusCode} ${formatUsageForLog(normalizedUsage)} ${elapsed}ms`);
       });
       upstreamRes.pipe(res);
     });
@@ -326,8 +357,7 @@ function handleAnthropic(req, res, payload) {
       let thinkingChars = 0;
       let thinkingText = '';
       let textChars = 0;
-      let inputTokens = 0;
-      let outputTokens = 0;
+      let rawUsage = null;
       let lineBuf = '';
       let jsonBuf = '';
 
@@ -348,11 +378,10 @@ function handleAnthropic(req, res, payload) {
                 if (evt.delta?.type === 'text_delta') textChars += (evt.delta.text || '').length;
               }
               if (evt.type === 'message_delta' && evt.usage) {
-                outputTokens = evt.usage.output_tokens || outputTokens;
+                rawUsage = { ...(rawUsage || {}), ...evt.usage };
               }
               if (evt.type === 'message_start' && evt.message?.usage) {
-                inputTokens = evt.message.usage.input_tokens || 0;
-                outputTokens = evt.message.usage.output_tokens || 0;
+                rawUsage = { ...(rawUsage || {}), ...evt.message.usage };
               }
             } catch {}
           }
@@ -369,16 +398,16 @@ function handleAnthropic(req, res, payload) {
               if (block.type === 'thinking') { thinkingChars += (block.thinking || '').length; if (CAPTURE_THINKING) thinkingText += (block.thinking || ''); }
               if (block.type === 'text') textChars += (block.text || '').length;
             }
-            inputTokens = j.usage?.input_tokens || 0;
-            outputTokens = j.usage?.output_tokens || 0;
+            if (j.usage) rawUsage = { ...(rawUsage || {}), ...j.usage };
           } catch {}
         }
+        const normalizedUsage = normalizeUsage(rawUsage);
         const elapsed = Date.now() - reqStartTs;
         log(
           `MSG_DONE model=${mutated.model} `
           + `thinking=${thinkingChars > 0 ? `Y(${thinkingChars}chars)` : 'N'} `
           + `text=${textChars}chars stream=${isStream} `
-          + `usage=${inputTokens}/${outputTokens} ${elapsed}ms`
+          + `${formatUsageForLog(normalizedUsage)} ${elapsed}ms`
         );
         // 测试开关开启时，把本轮思考正文落盘（默认关闭，不影响真实用户与默认测试行为）
         writeThinking(reqStartTs, thinkingText);

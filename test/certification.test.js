@@ -23,6 +23,9 @@ const { buildLinuxScript, runLinuxHermesSmoke } = require('../scripts/certificat
 const { runCommand } = require('../scripts/certification/runner-utils');
 const { parseArgs, runCertification } = require('../scripts/certify-provider');
 const { blackboxRetest, claudeArgs, gatewayFieldsMatch, healthMatches, LONG_TASK_MAX_TOOL_ROUNDS, LONG_TASK_MIN_TOOL_ROUNDS, parseSequence, runCaptureMatrix, runTrueKeyClient, snapshotWorkspace, staticCheckLongTask, trueTargets } = require('../scripts/client-e2e');
+const { modelFromName } = require('../scripts/provider-smoke');
+const { formatUsageForLog, normalizeUsage } = require('../proxy/usage');
+const { mergeTokenUsage, parseGatewayLogUsage, parseLogUsage } = require('../scripts/lib/token-usage');
 
 let passed = 0;
 let failed = 0;
@@ -91,6 +94,9 @@ async function run() {
     assert.deepStrictEqual(parseArgs(['--provider', 'deepseek', '--dry-run']).provider, 'deepseek');
     assert.strictEqual(parseArgs(['--provider=deepseek']).provider, 'deepseek');
     assert.strictEqual(parseArgs(['--provider=deepseek']).reportRoot, undefined);
+    assert.strictEqual(parseArgs(['--provider=zai', '--model', 'glm-new', '--flash-model=glm-fast']).model, 'glm-new');
+    assert.strictEqual(parseArgs(['--provider=zai', '--model', 'glm-new', '--flash-model=glm-fast']).flashModel, 'glm-fast');
+    assert.strictEqual(parseArgs(['--provider=zai', '--expected-branch', 'codex/test']).expectedBranch, 'codex/test');
   });
   check('package exposes provider and release certification scripts', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
@@ -113,6 +119,61 @@ async function run() {
     ]);
     assert.strictEqual(summary.testCases[0].status, STATUSES.FAIL);
     assert.strictEqual(summary.passed, false);
+  });
+  check('token usage normalizer supports Anthropic and OpenAI shapes', () => {
+    assert.deepStrictEqual(normalizeUsage({ input_tokens: 12, output_tokens: 34 }), {
+      inputTokens: 12,
+      outputTokens: 34,
+      reasoningTokens: 0,
+      totalTokens: 46,
+      missingUsage: false,
+      partialUsage: false,
+    });
+    assert.deepStrictEqual(normalizeUsage({
+      prompt_tokens: 5,
+      completion_tokens: 7,
+      total_tokens: 20,
+      completion_tokens_details: { reasoning_tokens: 3 },
+    }), {
+      inputTokens: 5,
+      outputTokens: 7,
+      reasoningTokens: 3,
+      totalTokens: 20,
+      missingUsage: false,
+      partialUsage: false,
+    });
+    assert.strictEqual(normalizeUsage({}).missingUsage, true);
+    assert.strictEqual(formatUsageForLog({ prompt_tokens: 5, completion_tokens: 7, total_tokens: 20 }), 'usage=5/7/20');
+    assert.strictEqual(formatUsageForLog(normalizeUsage(null)), 'usage=none');
+  });
+  check('gateway token usage parser supports old, new, none and partial usage logs', () => {
+    const usage = parseGatewayLogUsage([
+      '[00:00:01] MSG_DONE model=claude-model thinking=N text=4chars stream=true usage=12/34 100ms',
+      '[00:00:02] RESPONSES_DONE id=resp model=codex-model effort=max thinking=N text=2chars tools=0 usage=1/2/3 usage_reasoning=4 120ms',
+      '[00:00:03] CHAT_DONE model=chat-model stream=false status=200 usage=none 50ms',
+      '[00:00:04] CHAT_DONE model=partial-model stream=false status=200 usage=?/9/9 usage_partial=1 50ms',
+    ].join('\n'), { source: 'unit', providerId: 'deepseek' });
+    assert.strictEqual(usage.requests, 4);
+    assert.strictEqual(usage.requestsWithUsage, 3);
+    assert.strictEqual(usage.missingUsageCount, 1);
+    assert.strictEqual(usage.partialUsageCount, 1);
+    assert.strictEqual(usage.inputTokens, 13);
+    assert.strictEqual(usage.outputTokens, 45);
+    assert.strictEqual(usage.reasoningTokens, 4);
+    assert.strictEqual(usage.totalTokens, 58);
+    assert.strictEqual(usage.records[0].path, '/v1/messages');
+    assert.strictEqual(usage.records[1].path, '/v1/responses');
+    assert.strictEqual(usage.records[2].missingUsage, true);
+    assert.strictEqual(parseLogUsage('?/5/5', true).partialUsage, true);
+  });
+  check('token usage merger preserves request counts and unknown usage', () => {
+    const left = parseGatewayLogUsage('MSG_DONE model=a usage=1/2/3', { source: 'left' });
+    const right = parseGatewayLogUsage('CHAT_DONE model=b usage=none', { source: 'right' });
+    const merged = mergeTokenUsage([left, right]);
+    assert.strictEqual(merged.requests, 2);
+    assert.strictEqual(merged.requestsWithUsage, 1);
+    assert.strictEqual(merged.missingUsageCount, 1);
+    assert.strictEqual(merged.totalTokens, 3);
   });
   check('secret scan turns leaked TC-046 evidence into FAIL', () => {
     const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepseek-secret-report-'));
@@ -241,6 +302,7 @@ async function run() {
     assert.strictEqual(report.passed, false);
     assert.strictEqual(report.planReady, true);
     assert.strictEqual(report.providerId, 'deepseek');
+    assert.strictEqual(report.tokenUsage.requests, 0);
     if (process.platform !== 'linux') assert.strictEqual(report.testCases.some(tc => tc.id === 'TC-044'), false);
     assert(fs.existsSync(report.reportJsonPath));
     fs.rmSync(reportRoot, { recursive: true, force: true });
@@ -293,6 +355,16 @@ async function run() {
     assert.strictEqual(steps[0].thinking, 'disabled');
     assert.strictEqual(steps[1].effort, 'high');
   });
+  check('sequence parser keeps explicit model ids for new-model probes', () => {
+    const steps = parseSequence('codex:glm-5.2:on:max', { pro: 'glm-5.1', flash: 'glm-5-turbo' });
+    assert.strictEqual(steps[0].model, 'glm-5.2');
+  });
+  check('provider smoke model aliases use the selected provider profile', () => {
+    const zai = getProviderProfile('zai');
+    assert.strictEqual(modelFromName('pro', zai), 'glm-5.1');
+    assert.strictEqual(modelFromName('flash', zai), 'glm-5-turbo');
+    assert.strictEqual(modelFromName('glm-5.2', zai), 'glm-5.2');
+  });
   check('true-key target parser keeps explicit client cases', () => {
     assert.deepStrictEqual(trueTargets('claude-command,codex-long'), ['claude-command', 'codex-long']);
   });
@@ -321,6 +393,27 @@ async function run() {
     assert.strictEqual(result.steps.length, 6);
     assert(result.positiveAssertions >= 18);
     assert(result.steps.every(step => step.switchedConfigRoot === true));
+  });
+  await check('capture matrix uses ZAI adapter and forbids DeepSeek-only effort fields', async () => {
+    const result = await runCaptureMatrix({ providerId: 'zai', sequence: 'claude:pro:on:max -> codex:pro:on:max' });
+    assert.strictEqual(result.passed, true);
+    assert.strictEqual(result.steps[0].health.provider, 'zai');
+    assert.strictEqual(result.steps[0].health.effort, null);
+    assert.strictEqual(result.steps[0].requests[0].body.thinking, undefined);
+    assert.strictEqual(result.steps[0].requests[0].body.output_config, undefined);
+    assert.strictEqual(result.steps[1].health.provider, 'zai');
+    assert.strictEqual(result.steps[1].requests[0].body.reasoning_effort, undefined);
+    assert.strictEqual(result.steps[1].requests[0].body.tool_stream, true);
+  });
+  await check('capture matrix uses Kimi adapter and suppresses effort fields', async () => {
+    const result = await runCaptureMatrix({ providerId: 'kimi', sequence: 'claude:pro:on:max -> codex:pro:on:max' });
+    assert.strictEqual(result.passed, true);
+    assert.strictEqual(result.steps[0].health.provider, 'kimi');
+    assert.strictEqual(result.steps[0].health.effort, null);
+    assert.strictEqual(result.steps[0].requests[0].body.thinking.type, 'enabled');
+    assert.strictEqual(result.steps[0].requests[0].body.output_config, undefined);
+    assert.strictEqual(result.steps[1].health.provider, 'kimi');
+    assert.strictEqual(result.steps[1].requests[0].body.reasoning_effort, undefined);
   });
   check('long task round gate is bounded to ten tool rounds', () => {
     assert.strictEqual(LONG_TASK_MIN_TOOL_ROUNDS, 2);

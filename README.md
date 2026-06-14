@@ -2,7 +2,7 @@
 
 让 Claude Code、OpenAI Codex CLI 和 Hermes Agent 透明使用 DeepSeek、智谱 BigModel、Kimi 模型，且**思考模式真的生效**。
 
-> ✅ 当前版本（v1.6.1）已支持 **3 个 provider**：DeepSeek、智谱 BigModel、Kimi（Moonshot）。三家都跑过同一套真实客户端认证（详见底部「支持的 Provider」与路线图）。
+> ✅ 当前版本（v1.6.2）已支持 **3 个 provider**：DeepSeek、智谱 BigModel、Kimi（Moonshot）。三家都跑过同一套真实客户端认证（详见底部「支持的 Provider」与路线图），认证报告会记录真实 API token 用量。
 
 ---
 
@@ -291,7 +291,7 @@ CHAT_DONE model=deepseek-v4-pro stream=false status=200 1750ms
 
 ## 开发者认证
 
-开发者侧的 provider 自动化认证能力（v1.5.0 引入，v1.6.1 已覆盖三家 provider），用来判断每个 provider 的回归和新模型接入是否真的可用。`--provider` 接受 `deepseek` / `zai` / `kimi`，各自读自己的 Key 环境变量（`DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` / `MOONSHOT_API_KEY`）。
+开发者侧的 provider 自动化认证能力（v1.5.0 引入，v1.6.2 已覆盖三家 provider），用来判断每个 provider 的回归和新模型接入是否真的可用。`--provider` 接受 `deepseek` / `zai` / `kimi`，各自读自己的 Key 环境变量（`DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` / `MOONSHOT_API_KEY`）。
 
 ```bash
 npm run certify:provider -- --provider deepseek --dry-run
@@ -300,10 +300,27 @@ DEEPSEEK_API_KEY=<key> npm run certify:provider -- --provider deepseek
 ZHIPU_API_KEY=<key>    npm run certify:provider -- --provider zai
 MOONSHOT_API_KEY=<key> npm run certify:provider -- --provider kimi
 DEEPSEEK_API_KEY=<key> npm run certify:provider -- --provider deepseek --target hermes-linux
+npm run certify:provider -- --provider <id> --model <new-model> --flash-model <secondary-model>
 npm run certify:release -- <mac-report> <windows-report> <linux-report>
 ```
 
-认证器会生成 `reports/provider-certification/<run-id>/report.json` 和 `report.md`，并按 56 条用例记录 `PASS / FAIL / BLOCKED / SKIPPED`。`dry-run` 只表示计划生成成功，固定为 `planReady=true`、`passed=false`，不会冒充真实认证通过。
+认证器会生成 `reports/provider-certification/<run-id>/report.json` 和 `report.md`，并按 56 条用例记录 `PASS / FAIL / BLOCKED / SKIPPED`。`dry-run` 只表示计划生成成功，固定为 `planReady=true`、`passed=false`，不会冒充真实认证通过。新增模型发布前可以用 `--model` / `--flash-model` 显式指定本轮认证模型；不传时仍使用 provider profile 的默认 pro/flash 模型。
+
+`report.json` 顶层包含 `tokenUsage`，用于估算本轮真实 API 使用量：
+
+```json
+{
+  "requests": 38,
+  "requestsWithUsage": 38,
+  "missingUsageCount": 0,
+  "inputTokens": 222219,
+  "outputTokens": 10744,
+  "reasoningTokens": 5186,
+  "totalTokens": 232963
+}
+```
+
+`tokenUsage.records[]` 会按请求记录 `source`、`client`、`caseName`、`path`、`providerId`、`model` 和 token 数。provider 未返回 usage 时计入 `missingUsageCount`，不阻断认证；报告只统计 token，不内置价格表、不估算金额。
 
 当前认证范围包括：
 - 各 provider 的 health / Anthropic Messages / OpenAI Chat（Codex 桥接）基础连通
@@ -312,6 +329,8 @@ npm run certify:release -- <mac-report> <windows-report> <linux-report>
 - 报告上下文、dirty worktree、true-key 证据、Key 泄露扫描、缺平台/缺 P0/假绿防护
 
 真实认证结果：macOS 上 DeepSeek / 智谱 / Kimi 各 55/55 PASS，Linux 上 DeepSeek 55/55 PASS（真客户端打真实 API，非 capture 演习）。
+
+v1.6.2 macOS 认证修复后，三家完整真 key 认证均重新跑过并产出 tokenUsage：DeepSeek `232,963` total tokens，智谱 `150,979` total tokens，Kimi `130,203` total tokens（Kimi 有部分请求未返回 usage，已计入 `missingUsageCount`）。
 
 Windows 报告可由 Windows 真机单独生成后人工合并；release gate 仍要求三平台报告来自同一目标分支和 commit。
 
@@ -323,7 +342,7 @@ Windows 报告可由 Windows 真机单独生成后人工合并；release gate �
 npm test
 ```
 
-111 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 v1.5.0 provider certification 的报告、release gate、capture runner、true-key runner 和 Linux Hermes runner。
+124 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 provider certification 的报告、release gate、capability-aware capture runner、true-key runner、Linux Hermes runner 和 tokenUsage 汇总。
 
 测试使用临时目录 + 本地假 DeepSeek 上游，**不调用真实 API，不修改真实 `~/.claude` / `~/.codex` / Hermes 配置**。
 
@@ -394,6 +413,7 @@ systemctl daemon-reload 2>/dev/null
 - ✅ **Key 泄漏止血（v1.5.1）** — 客户端配置（`~/.claude` / `~/.codex`）改写本地占位 token，不再把真实 provider key 明文落进客户端文件
 - ✅ **Provider Gateway 架构（v1.6.0）** — 把 DeepSeek 从一次性透传迁到 provider 无关、能力声明驱动的网关核心 + 原子部署；智谱 / Kimi 的实验底子保存在 git tag `archive/v1.6.0-provider-gateway`
 - ✅ **接入智谱 + Kimi（v1.6.1）** — 新增 `proxy/providers/zai.js` / `proxy/providers/kimi.js` 两个 adapter，向导第一步可选 Provider；三家共用同一套真实客户端认证
+- ✅ **认证可信度 + Token usage（v1.6.2）** — 修复非 DeepSeek provider capture 假绿，认证断言改为 capability-aware；`certify:provider` 支持 `--model` / `--flash-model`，报告新增真实 API tokenUsage 汇总
 
 下一步：
 

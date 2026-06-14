@@ -20,21 +20,38 @@ const { runCommand } = require('./certification/runner-utils');
 const { runLinuxHermesSmoke } = require('./certification/linux-hermes-smoke');
 const { runSmoke } = require('./provider-smoke');
 const { runCaptureMatrix, runTrueKeyClient } = require('./client-e2e');
+const { appendCaptureCases } = require('./certification/capture-cases');
+const { emptyTokenUsage, mergeTokenUsage } = require('./lib/token-usage');
 
 function parseArgs(argv) {
-  const args = { provider: null, dryRun: false, fixture: false, target: null, reportRoot: undefined };
+  const args = { provider: null, dryRun: false, fixture: false, target: null, reportRoot: undefined, model: undefined, flashModel: undefined, expectedBranch: undefined };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--provider') args.provider = argv[++i];
     else if (arg.startsWith('--provider=')) args.provider = arg.split('=')[1];
+    else if (arg === '--model') args.model = argv[++i];
+    else if (arg.startsWith('--model=')) args.model = arg.split('=')[1];
+    else if (arg === '--flash-model') args.flashModel = argv[++i];
+    else if (arg.startsWith('--flash-model=')) args.flashModel = arg.split('=')[1];
     else if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--fixture') args.fixture = true;
     else if (arg === '--target') args.target = argv[++i];
     else if (arg.startsWith('--target=')) args.target = arg.split('=')[1];
+    else if (arg === '--expected-branch') args.expectedBranch = argv[++i];
+    else if (arg.startsWith('--expected-branch=')) args.expectedBranch = arg.split('=')[1];
     else if (arg === '--report-root') args.reportRoot = argv[++i];
     else if (arg.startsWith('--report-root=')) args.reportRoot = arg.split('=')[1];
   }
   return args;
+}
+
+function profileWithModelOverrides(profile, args) {
+  if (!args.model && !args.flashModel) return profile;
+  return {
+    ...profile,
+    defaultModel: args.model || profile.defaultModel,
+    flashModel: args.flashModel || profile.flashModel,
+  };
 }
 
 function resultFor(profile, id, patch) {
@@ -93,6 +110,13 @@ async function runClientEvidence(execution, options) {
   return result;
 }
 
+function certificationTokenUsage(execution) {
+  return mergeTokenUsage([
+    ...(execution.tokenUsageItems || []),
+    ...(execution.clientResults || []).map(result => result.tokenUsage),
+  ]);
+}
+
 function appendDryRunCases(profile, testCases) {
   testCases.push(resultFor(profile, 'TC-005', { status: STATUSES.PASS, message: 'profile resolved in dry-run', positiveAssertions: profile.stages.length }));
   testCases.push(resultFor(profile, 'TC-006', { status: STATUSES.PASS, message: 'platform context collected', positiveAssertions: 12 }));
@@ -133,7 +157,7 @@ async function runStageZeroFixtures(execution) {
   };
 }
 
-async function appendStageZeroCases(profile, testCases, execution, context) {
+async function appendStageZeroCases(profile, testCases, execution, context, expectedBranch = profile.releaseBranch) {
   const baseline = await runBaselineTests();
   execution.baseline = baseline;
   const baselineEvidence = writeEvidence(execution, 'baseline-tests.log', `${baseline.stdout}\n${baseline.stderr}`);
@@ -141,7 +165,7 @@ async function appendStageZeroCases(profile, testCases, execution, context) {
   const scriptEvidence = writeEvidence(execution, 'package-scripts.json', JSON.stringify({ scriptsOk }, null, 2));
   const requiredContext = ['repoPath', 'branch', 'commit', 'isDirty', 'platform', 'runnerId', 'runCommand'];
   const contextOk = requiredContext.every(field => context[field] !== undefined && context[field] !== null)
-    && context.branch === profile.releaseBranch;
+    && context.branch === expectedBranch;
   const contextEvidence = writeEvidence(execution, 'platform-context.json', JSON.stringify(context, null, 2));
   const fixtures = await runStageZeroFixtures(execution);
   testCases.push(resultFor(profile, 'TC-001', {
@@ -162,7 +186,7 @@ async function appendStageZeroCases(profile, testCases, execution, context) {
     ['TC-003', fixtures.tc003, 'CLI rejects missing provider before run', 1, fixtures.evidenceRefs],
     ['TC-004', fixtures.tc004, 'Unknown provider writes a failed preflight report', 1, fixtures.evidenceRefs],
     ['TC-005', Boolean(profile.id && profile.stages.length === 5), `${profile.displayName} profile resolved`, profile.stages.length, [contextEvidence]],
-    ['TC-006', contextOk, 'Platform context matches the target release branch', requiredContext.length + 1, [contextEvidence]],
+    ['TC-006', contextOk, `Platform context matches expected branch ${expectedBranch}`, requiredContext.length + 1, [contextEvidence]],
     ['TC-007', fixtures.tc007, 'Stage zero fixture failure blocks true-key execution', 2, fixtures.evidenceRefs],
   ]) {
     testCases.push(resultFor(profile, id, {
@@ -246,7 +270,9 @@ async function missingKeyScenario(profile, apiKey, execution) {
     return { passed: true, evidenceRefs: [evidence], message: `${profile.apiKeyEnv} is absent; true-key cases are BLOCKED` };
   }
   const reportRoot = path.join(execution.evidenceDir, 'no-key-scenario');
-  const command = await runCommand(process.execPath, ['scripts/certify-provider.js', '--provider', profile.id, '--report-root', reportRoot], {
+  const commandArgs = ['scripts/certify-provider.js', '--provider', profile.id, '--report-root', reportRoot];
+  if (execution.expectedBranch) commandArgs.push('--expected-branch', execution.expectedBranch);
+  const command = await runCommand(process.execPath, commandArgs, {
     env: { [profile.apiKeyEnv]: '', CERTIFY_NO_KEY_SCENARIO: '1' },
     timeoutMs: 360000,
   });
@@ -272,7 +298,8 @@ async function appendStageOneCases(profile, testCases, apiKey, execution) {
   }));
   if (!apiKey) return false;
 
-  const smoke = await runSmoke({ providerId: profile.id, apiKey });
+  const smoke = await runSmoke({ providerId: profile.id, apiKey, model: profile.defaultModel });
+  if (smoke.tokenUsage) execution.tokenUsageItems.push(smoke.tokenUsage);
   const smokeEvidence = writeEvidence(execution, 'provider-smoke.json', JSON.stringify(smoke, null, 2));
   for (const [id, assertions] of [['TC-010', 3], ['TC-011', 2], ['TC-012', 2], ['TC-013', 1]]) {
     testCases.push(resultFor(profile, id, {
@@ -297,46 +324,6 @@ async function appendStageOneCases(profile, testCases, apiKey, execution) {
   return stageP0Passed(testCases, 1);
 }
 
-function captureCase(profile, testCases, id, passed, message, assertions, evidenceRef) {
-  testCases.push(resultFor(profile, id, {
-    status: passed ? STATUSES.PASS : STATUSES.FAIL,
-    failureClass: passed ? null : 'gateway',
-    message,
-    positiveAssertions: assertions,
-    evidenceRefs: evidenceRef ? [evidenceRef] : [],
-  }));
-}
-
-function appendCaptureCases(profile, testCases, capture, evidenceRef) {
-  const byStep = Object.fromEntries(capture.steps.map(step => [step.step, step]));
-  const steps = Object.fromEntries(capture.steps.map(step => [step.step, step.requests[0]?.body || {}]));
-  const ch = steps['claude:pro:on:high'];
-  const cm = steps['claude:pro:on:max'];
-  const cf = steps['claude:flash:off:-'];
-  const dx = steps['codex:pro:on:max'];
-  const df = steps['codex:flash:off:-'];
-  const dh = steps['codex:pro:on:high'];
-  captureCase(profile, testCases, 'TC-024', ch?.model === profile.defaultModel && dx?.model === profile.defaultModel, 'Pro capture model fields match', 2, evidenceRef);
-  captureCase(
-    profile,
-    testCases,
-    'TC-025',
-    byStep['claude:flash:off:-']?.switchedConfigRoot === true
-      && byStep['codex:flash:off:-']?.switchedConfigRoot === true
-      && cf?.model === profile.flashModel
-      && df?.model === profile.flashModel,
-    'First Flash requests after in-run gateway restart contain no Pro model',
-    4,
-    evidenceRef,
-  );
-  captureCase(profile, testCases, 'TC-026', ch?.thinking?.type === 'enabled' && cm?.thinking?.type === 'enabled', 'Anthropic thinking enabled fields match', 2, evidenceRef);
-  captureCase(profile, testCases, 'TC-027', ch?.output_config?.effort === 'high' && cm?.output_config?.effort === 'max', 'Anthropic high/max efforts match', 2, evidenceRef);
-  captureCase(profile, testCases, 'TC-028', cf?.thinking?.type === 'disabled' && cf?.output_config === undefined, 'Anthropic thinking off removes output_config', 2, evidenceRef);
-  captureCase(profile, testCases, 'TC-029', dx?.reasoning_effort === 'max' && dh?.reasoning_effort === 'high', 'Responses thinking on reasoning efforts match', 2, evidenceRef);
-  captureCase(profile, testCases, 'TC-030', df?.thinking?.type === 'disabled' && df?.reasoning_effort === undefined, 'Responses thinking off removes effort', 2, evidenceRef);
-  captureCase(profile, testCases, 'TC-031', dx?.model === dh?.model && dx?.thinking?.type === dh?.thinking?.type && dx?.reasoning_effort !== dh?.reasoning_effort, 'Only Responses effort changes from max to high', 3, evidenceRef);
-}
-
 function baselineHas(execution, pattern) {
   return execution.baseline?.ok && pattern.test(execution.baseline.stdout || '');
 }
@@ -344,7 +331,7 @@ function baselineHas(execution, pattern) {
 async function appendStageTwoCases(profile, testCases, apiKey, execution) {
   const capture = await runCaptureMatrix({ providerId: profile.id, sequence: 'claude:pro:on:high -> claude:pro:on:max -> claude:flash:off:- -> codex:pro:on:max -> codex:flash:off:- -> codex:pro:on:high' });
   const captureEvidence = writeEvidence(execution, 'capture-matrix.json', JSON.stringify(capture, null, 2));
-  appendCaptureCases(profile, testCases, capture, captureEvidence);
+  appendCaptureCases({ profile, testCases, capture, evidenceRef: captureEvidence, resultFor });
   const claudeCommand = await runClientEvidence(execution, { providerId: profile.id, apiKey, targets: 'claude-command', model: profile.defaultModel, thinking: 'enabled', effort: 'max' });
   const claudeFlash = await runClientEvidence(execution, { providerId: profile.id, apiKey, targets: 'claude-text', model: profile.flashModel, thinking: 'disabled', effort: 'max' });
   const claudeProMax = await runClientEvidence(execution, { providerId: profile.id, apiKey, targets: 'claude-text', model: profile.defaultModel, thinking: 'enabled', effort: 'max' });
@@ -469,6 +456,7 @@ async function appendStageFourCases(profile, testCases, args, longResults, execu
       env: { CERTIFY_LINUX_REPO: process.cwd() },
     });
     const linuxEvidence = writeEvidence(execution, 'linux-hermes-smoke.json', JSON.stringify(linux, null, 2));
+    if (linux.tokenUsage) execution.tokenUsageItems.push(linux.tokenUsage);
     linux.report = { jsonPath: linuxEvidence };
     appendRunnerResult(profile, testCases, 'TC-044', linux, 'Linux Hermes true-key smoke');
   } else if (execution.context.platform === 'linux') {
@@ -631,7 +619,7 @@ async function runCertification(options = {}) {
     throw new Error('必须指定 --provider <provider-id>');
   }
 
-  const profile = getProviderProfile(args.provider);
+  const baseProfile = getProviderProfile(args.provider);
   const registeredProviderIds = new Set([
     ...listProviderIds(),
     ...(options.registeredProviderIds || []),
@@ -640,7 +628,7 @@ async function runCertification(options = {}) {
   const context = collectPlatformContext({ startedAt, argv: ['scripts/certify-provider.js', ...(options.argv || process.argv.slice(2))] });
   const { runId, runDir } = createRunDir(args.provider, process.platform, args.reportRoot);
 
-  if (!profile) {
+  if (!baseProfile) {
     const failureMessage = registeredProviderIds.has(args.provider)
       ? 'provider is not certified in v1.5.0'
       : `unknown provider: ${args.provider}`;
@@ -654,11 +642,14 @@ async function runCertification(options = {}) {
       counts: { PASS: 0, FAIL: 1, BLOCKED: 0, SKIPPED: 0 },
       failures: [{ id: 'provider-profile', status: STATUSES.FAIL, failureClass: 'preflight', message: failureMessage }],
       testCases: [],
+      tokenUsage: emptyTokenUsage(),
       finishedAt: new Date().toISOString(),
     };
     return writeReport(report, [process.env.DEEPSEEK_API_KEY]);
   }
 
+  const profile = profileWithModelOverrides(baseProfile, args);
+  const expectedBranch = args.expectedBranch || profile.releaseBranch;
   const testCases = [];
   let stoppedAtStage = null;
   const execution = {
@@ -666,6 +657,8 @@ async function runCertification(options = {}) {
     clientResults: [],
     context,
     evidenceDir: path.join(runDir, 'evidence'),
+    expectedBranch,
+    tokenUsageItems: [],
   };
   try {
     if (args.dryRun) {
@@ -675,7 +668,7 @@ async function runCertification(options = {}) {
       stoppedAtStage = 0;
       blockRemaining(profile, testCases, 1, 'blocked because stage 0 failed', context.platform);
     } else {
-      await appendStageZeroCases(profile, testCases, execution, context);
+      await appendStageZeroCases(profile, testCases, execution, context, expectedBranch);
       if (testCases.some(tc => tc.stage === 0 && tc.priority === 'P0' && tc.status !== STATUSES.PASS)) {
         stoppedAtStage = 0;
         blockRemaining(profile, testCases, 1, 'blocked because stage 0 failed', context.platform);
@@ -722,12 +715,20 @@ async function runCertification(options = {}) {
     runDir,
     providerId: profile.id,
     providerDisplayName: profile.displayName,
+    expectedBranch,
+    modelOverride: args.model,
+    flashModelOverride: args.flashModel,
+    effectiveModels: {
+      defaultModel: profile.defaultModel,
+      flashModel: profile.flashModel,
+    },
     hasTrueKey: Boolean(process.env[profile.apiKeyEnv]),
     dryRun: Boolean(args.dryRun),
     planReady: Boolean(args.dryRun),
     fixture: Boolean(args.fixture),
     stoppedAtStage,
     stages: profile.stages,
+    tokenUsage: certificationTokenUsage(execution),
     finishedAt: new Date().toISOString(),
     ...aggregate,
   };

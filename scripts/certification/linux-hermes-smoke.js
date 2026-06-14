@@ -12,6 +12,7 @@
 
 const { randomPort, runCommand } = require('./runner-utils');
 const { redactText } = require('./report-writer');
+const { emptyTokenUsage } = require('../lib/token-usage');
 
 function shQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
@@ -50,9 +51,21 @@ function buildLinuxScript(env) {
     'chmod -R a+rX "$CERT_TMP"',
     'if [ "$(id -u)" -eq 0 ]; then sudo -iu hermes env HERMES_CONFIG_PATH="$HERMES_CONFIG_PATH" HERMES_HOME=/var/lib/hermes timeout 120 hermes -z "Reply with exactly: HERMES_OK" --ignore-rules; else HERMES_CONFIG_PATH="$HERMES_CONFIG_PATH" timeout 120 hermes -z "Reply with exactly: HERMES_OK" --ignore-rules; fi',
     'test -s "$DEEPSEEK_CLAUDE_LOG_PATH"',
-    'node -e \'const fs=require("fs"); const log=fs.readFileSync(process.env.DEEPSEEK_CLAUDE_LOG_PATH,"utf8"); const key=process.env.DEEPSEEK_API_KEY||""; const lengths=[key.length,24,16,12].filter(n=>n>=8&&n<=key.length); const hit=lengths.find(n=>log.includes(key.slice(0,n))); if(hit){ console.error("secret fragment in gateway log length="+hit); process.exit(1); } console.log(JSON.stringify({gatewayLogBytes:Buffer.byteLength(log),gatewayLogLines:log.split(/\\n/).filter(Boolean).length,gatewayLogCompleted:/CHAT_DONE|POST \\/v1\\/messages|POST \\/v1\\/chat\\/completions/.test(log)}));\'',
+    'node -e \'const fs=require("fs"); const {parseGatewayLogUsage}=require("./scripts/lib/token-usage"); const log=fs.readFileSync(process.env.DEEPSEEK_CLAUDE_LOG_PATH,"utf8"); const key=process.env.DEEPSEEK_API_KEY||""; const lengths=[key.length,24,16,12].filter(n=>n>=8&&n<=key.length); const hit=lengths.find(n=>log.includes(key.slice(0,n))); if(hit){ console.error("secret fragment in gateway log length="+hit); process.exit(1); } const tokenUsage=parseGatewayLogUsage(log,{source:"linux-hermes-smoke",providerId:"deepseek",model:"deepseek-v4-pro"}); console.log(JSON.stringify({gatewayLogBytes:Buffer.byteLength(log),gatewayLogLines:log.split(/\\n/).filter(Boolean).length,gatewayLogCompleted:/CHAT_DONE|POST \\/v1\\/messages|POST \\/v1\\/chat\\/completions/.test(log),tokenUsage}));\'',
     'node -e \'const h=require("./src/hermes-patcher").getStatus(); console.log(JSON.stringify({target:"Hermes Agent", config:h}))\'',
   ].join('\n');
+}
+
+function tokenUsageFromStdout(stdout) {
+  const lines = String(stdout || '').split(/\r?\n/);
+  for (const line of lines) {
+    if (!line.includes('"tokenUsage"')) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.tokenUsage) return parsed.tokenUsage;
+    } catch {}
+  }
+  return emptyTokenUsage();
 }
 
 /**
@@ -70,6 +83,7 @@ async function runLinuxHermesSmoke(options = {}) {
       failureClass: 'preflight',
       message: 'TC-044 must be executed on the Linux server itself; remote results cannot be attached to another platform report',
       positiveAssertions: 1,
+      tokenUsage: emptyTokenUsage(),
     };
   }
   if (!env.DEEPSEEK_API_KEY) {
@@ -79,6 +93,7 @@ async function runLinuxHermesSmoke(options = {}) {
       failureClass: 'provider',
       message: 'DEEPSEEK_API_KEY is required for Linux Hermes smoke',
       positiveAssertions: 1,
+      tokenUsage: emptyTokenUsage(),
     };
   }
   env.CERTIFY_LINUX_REPO = env.CERTIFY_LINUX_REPO || process.cwd();
@@ -97,6 +112,7 @@ async function runLinuxHermesSmoke(options = {}) {
   const statusSummaryOk = /Loaded:|Active:|Main PID:/.test(stdout);
   const gatewayLogOk = /"gatewayLogBytes":\s*[1-9]\d*/.test(stdout) && /"gatewayLogCompleted":\s*true/.test(stdout);
   const diagnosticOk = /"target":\s*"Hermes Agent"/.test(stdout) || /Hermes Agent/.test(stdout);
+  const tokenUsage = tokenUsageFromStdout(stdout);
   const modelOk = /"model":"deepseek-v4-pro"/.test(stdout)
     && /"thinking":"enabled"/.test(stdout)
     && /"effort":"max"/.test(stdout);
@@ -110,6 +126,7 @@ async function runLinuxHermesSmoke(options = {}) {
     positiveAssertions: Number(result.status === 0) + Number(serviceActive) + Number(proxyHealthOk) + Number(hermesOk) + Number(statusSummaryOk) + Number(gatewayLogOk) + Number(diagnosticOk) + Number(modelOk),
     stdout: stdout.slice(-4000),
     stderr: stderr.slice(-4000),
+    tokenUsage,
     durationMs: result.durationMs,
   };
 }

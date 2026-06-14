@@ -188,6 +188,8 @@ function renderMarkdown(report) {
     `- FAIL: ${report.counts.FAIL}`,
     `- BLOCKED: ${report.counts.BLOCKED}`,
     `- SKIPPED: ${report.counts.SKIPPED}`,
+    `- Token requests: ${report.tokenUsage?.requests || 0}`,
+    `- Tokens: input=${report.tokenUsage?.inputTokens || 0}, output=${report.tokenUsage?.outputTokens || 0}, total=${report.tokenUsage?.totalTokens || 0}, missing=${report.tokenUsage?.missingUsageCount || 0}`,
     '',
     '## Gate Failures',
     '',

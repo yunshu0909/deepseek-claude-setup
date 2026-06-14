@@ -18,7 +18,9 @@ const { spawn } = require('child_process');
 const { getProviderProfile } = require('./certification/provider-profiles');
 const { makeTempRoot, randomPort, removeIfExists, requestJson, runCommand } = require('./certification/runner-utils');
 const { redactText, scanForSecrets } = require('./certification/report-writer');
-const { startCaptureServer } = require('./upstream-capture-server');
+const { parseSequence, runCaptureMatrix } = require('./lib/capture-runner');
+const { blackboxRetest, staticCheckLongTask } = require('./lib/long-task-checks');
+const { compactTokenUsage, emptyTokenUsage, mergeTokenUsage, parseGatewayLogUsage } = require('./lib/token-usage');
 
 const DEFAULT_REPORT_DIR = path.join(process.cwd(), '自动化测试', 'V1.5.0');
 // 2 = 高效 agent 的合理最小轮数（一个 heredoc 写完 todo.js+test.js+跑测 → 看结果后确认，本就 ≥2 轮，
@@ -105,28 +107,13 @@ function baseEnv(homeDir) {
   return env;
 }
 
-function parseSequence(input, models = { pro: 'deepseek-v4-pro', flash: 'deepseek-v4-flash' }) {
-  const raw = input || process.env.CLIENT_E2E_SEQUENCE || '';
-  if (!raw) return [];
-  return raw.split(/\s*->\s*/).filter(Boolean).map(step => {
-    const [target, model, thinking, effort] = step.split(':');
-    return {
-      target: target === 'ds' ? 'codex' : target,
-      model: model === 'flash' ? models.flash : models.pro,
-      thinking: thinking === 'off' ? 'disabled' : 'enabled',
-      effort: effort && effort !== '-' ? effort : 'max',
-      raw: step,
-    };
-  });
-}
-
 function trueTargets(input) {
   const raw = input || process.env.CLIENT_E2E_TARGETS || 'claude-text,claude-tool,codex-tool';
   return raw.split(',').map(x => x.trim()).filter(Boolean);
 }
 
-function selectedModel() {
-  return process.env.CLIENT_E2E_MODEL || 'deepseek-v4-pro';
+function selectedModel(provider) {
+  return process.env.CLIENT_E2E_MODEL || provider?.defaultModel || 'deepseek-v4-pro';
 }
 
 function selectedThinking() {
@@ -198,6 +185,7 @@ async function runTrueKeyClientAsUser(provider, options, context) {
     stdout: redactText(tail(command.stdout), [context.apiKey]),
     stderr: redactText(tail(command.stderr), [context.apiKey]),
     positiveAssertions: 0,
+    tokenUsage: emptyTokenUsage(),
     cases: [],
   };
 }
@@ -245,121 +233,6 @@ async function stopProxy(proxy, port) {
   if (!proxy) return;
   try { await requestJson({ port, requestPath: '/__stop', method: 'POST', timeoutMs: 1000 }); } catch {}
   if (!proxy.child.killed) proxy.child.kill();
-}
-
-async function runCaptureStep(step, config) {
-  const tmpRoot = makeTempRoot('deepseek-client-e2e-');
-  const port = randomPort();
-  const logPath = path.join(tmpRoot, 'gateway.log');
-  const capture = await startCaptureServer({ outputFile: path.join(tmpRoot, 'requests.jsonl') });
-  let proxy = null;
-  try {
-    proxy = await startProxy({ tmpRoot, port, capturePort: capture.port, config, logPath });
-    if (proxy.health.model !== config.model || proxy.health.thinking !== config.thinking) {
-      throw new Error(`health mismatch for ${step.raw}`);
-    }
-    const body = step.target === 'claude'
-      ? { model: 'ignored', max_tokens: 16, messages: [{ role: 'user', content: 'Reply with CAPTURE_OK' }] }
-      : {
-        model: 'ignored',
-        input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Reply with CAPTURE_OK' }] }],
-        stream: false,
-        tools: [{ type: 'function', name: 'read_file', parameters: { type: 'object', properties: {} } }],
-      };
-    await requestJson({
-      port,
-      requestPath: step.target === 'claude' ? '/v1/messages' : '/v1/responses',
-      headers: step.target === 'claude' ? { 'anthropic-version': '2023-06-01' } : {},
-      body,
-    });
-    const requests = fs.readFileSync(capture.outputFile, 'utf8').trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
-    return { step: step.raw, target: step.target, health: proxy.health, requests, positiveAssertions: 3 + requests.length, status: 'PASS' };
-  } finally {
-    if (proxy) await stopProxy(proxy, port);
-    await new Promise(resolve => capture.server.close(resolve));
-    removeIfExists(tmpRoot);
-  }
-}
-
-/**
- * 在同一临时配置根目录内依序切换配置并重启 gateway。
- * @param {object[]} steps - 配置切换步骤。
- * @returns {Promise<object[]>} 每一步的首批抓包结果。
- */
-async function runCaptureSequence(steps) {
-  const tmpRoot = makeTempRoot('deepseek-client-e2e-switch-');
-  const port = randomPort();
-  const logPath = path.join(tmpRoot, 'gateway.log');
-  const capture = await startCaptureServer({ outputFile: path.join(tmpRoot, 'requests.jsonl') });
-  const results = [];
-  let proxy = null;
-  try {
-    for (const step of steps) {
-      proxy = await startProxy({
-        tmpRoot,
-        port,
-        capturePort: capture.port,
-        logPath,
-        config: { apiKey: 'sk-capture-placeholder', model: step.model, thinking: step.thinking, effort: step.effort },
-      });
-      const before = fs.existsSync(capture.outputFile)
-        ? fs.readFileSync(capture.outputFile, 'utf8').trim().split(/\r?\n/).filter(Boolean).length
-        : 0;
-      const body = step.target === 'claude'
-        ? { model: 'ignored', max_tokens: 16, messages: [{ role: 'user', content: 'Reply with CAPTURE_OK' }] }
-        : {
-          model: 'ignored',
-          input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Reply with CAPTURE_OK' }] }],
-          stream: false,
-          tools: [{ type: 'function', name: 'read_file', parameters: { type: 'object', properties: {} } }],
-        };
-      await requestJson({
-        port,
-        requestPath: step.target === 'claude' ? '/v1/messages' : '/v1/responses',
-        headers: step.target === 'claude' ? { 'anthropic-version': '2023-06-01' } : {},
-        body,
-      });
-      const allRequests = fs.readFileSync(capture.outputFile, 'utf8').trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
-      results.push({ step: step.raw, target: step.target, health: proxy.health, requests: allRequests.slice(before), switchedConfigRoot: true, status: 'PASS' });
-      await stopProxy(proxy, port);
-      proxy = null;
-    }
-    return results;
-  } finally {
-    if (proxy) await stopProxy(proxy, port);
-    await new Promise(resolve => capture.server.close(resolve));
-    removeIfExists(tmpRoot);
-  }
-}
-
-function assertCaptureStep(stepResult, expected) {
-  const first = stepResult.requests[0]?.body || {};
-  const checks = [
-    first.model === expected.model,
-    first.thinking?.type === expected.thinking,
-  ];
-  if (expected.target === 'claude') {
-    checks.push(expected.thinking === 'enabled' ? first.output_config?.effort === expected.effort : first.output_config === undefined);
-  } else {
-    checks.push(expected.thinking === 'enabled' ? first.reasoning_effort === expected.effort : first.reasoning_effort === undefined);
-  }
-  if (!checks.every(Boolean)) throw new Error(`capture assertion failed for ${expected.raw}: ${JSON.stringify(first)}`);
-  return checks.length;
-}
-
-async function runCaptureMatrix(options = {}) {
-  const provider = getProviderProfile(options.providerId || process.env.CLIENT_E2E_PROVIDER || 'deepseek');
-  if (!provider) throw new Error('unknown provider');
-  const seqModels = { pro: provider.defaultModel, flash: provider.flashModel };
-  const steps = parseSequence(options.sequence, seqModels).length ? parseSequence(options.sequence, seqModels) : parseSequence('codex:pro:on:max', seqModels);
-  const results = await runCaptureSequence(steps);
-  let positiveAssertions = 0;
-  for (let index = 0; index < steps.length; index++) {
-    const step = steps[index];
-    const stepResult = results[index];
-    positiveAssertions += assertCaptureStep(stepResult, step);
-  }
-  return { providerId: provider.id, mode: 'capture', status: 'PASS', passed: true, positiveAssertions, steps: results };
 }
 
 async function preflight(targets, bins) {
@@ -545,6 +418,13 @@ async function runClaudeTarget(ctx, target) {
   };
   const result = await runCommand(ctx.bins.claude, claudeArgs(ctx, ctx.model, prompt, !isText), { cwd: ws.dir, env, timeoutMs: isLong ? ctx.longTimeoutMs : ctx.shortTimeoutMs });
   const caseLog = logText(ctx, start);
+  const tokenUsage = parseGatewayLogUsage(caseLog, {
+    source: 'client-e2e',
+    client: 'claude',
+    caseName: target,
+    providerId: ctx.providerId,
+    model: ctx.model,
+  });
   const gatewayFieldsMatched = gatewayFieldsMatch(ctx, caseLog, 'claude');
   let assertions = Number(result.status === 0) + Number(caseLog.includes('MSG_DONE')) + Number(ctx.gatewayHealthPassed) + Number(gatewayFieldsMatched);
   let extra = {};
@@ -602,6 +482,7 @@ async function runClaudeTarget(ctx, target) {
     stdout: redactFor(ctx, tail(result.stdout)),
     stderr: redactFor(ctx, tail(result.stderr)),
     logSummary: redactFor(ctx, tail(caseLog)),
+    tokenUsage,
     ...extra,
   };
 }
@@ -622,6 +503,13 @@ async function runCodexTarget(ctx, target) {
   const result = await runCommand(ctx.bins.codex, codexArgs(ctx, ctx.model, ws.dir, outputFile, prompt, isLong), { cwd: ws.dir, env, timeoutMs: isLong ? ctx.longTimeoutMs : ctx.shortTimeoutMs });
   const lastMessage = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8') : '';
   const caseLog = logText(ctx, start);
+  const tokenUsage = parseGatewayLogUsage(caseLog, {
+    source: 'client-e2e',
+    client: 'codex',
+    caseName: target,
+    providerId: ctx.providerId,
+    model: ctx.model,
+  });
   // 无 effort 档 provider（zai/kimi）：codex RESPONSES 日志记 effort=-（无 reasoning_effort）
   const expectedLogEffort = ctx.thinking === 'disabled'
     ? 'undefined'
@@ -686,76 +574,9 @@ async function runCodexTarget(ctx, target) {
     stderr: redactFor(ctx, tail(result.stderr)),
     lastMessage: redactFor(ctx, tail(lastMessage)),
     logSummary: redactFor(ctx, tail(caseLog)),
+    tokenUsage,
     ...extra,
   };
-}
-
-async function blackboxRetest(workspaceDir) {
-  const testPath = path.join(workspaceDir, 'certification-blackbox.test.js');
-  fs.writeFileSync(testPath, [
-    "const assert = require('assert');",
-    "const fs = require('fs');",
-    "const cp = require('child_process');",
-    "function lines(text) { return text.trim().split(/\\r?\\n/).filter(Boolean); }",
-    "function hasId(line, id) { return new RegExp(`(^|\\\\D)${id}(\\\\D|$)`).test(line); }",
-    "function assertTodoLine(line, id, task, done) {",
-    "  assert(line.includes(task), `missing task ${task}: ${line}`);",
-    "  assert(hasId(line, id), `missing id ${id}: ${line}`);",
-    "  const doneMarker = /\\[x\\]|\\[done\\]|✓|✔|✅/i.test(line);",
-    "  const openMarker = /\\[\\s\\]|☐|○/i.test(line);",
-    "  assert.strictEqual(doneMarker, done, `done marker mismatch: ${line}`);",
-    "  if (!done) assert(openMarker, `missing open marker: ${line}`);",
-    "}",
-    "try { fs.unlinkSync('todo.json'); } catch {}",
-    "cp.execFileSync(process.execPath, ['todo.js', 'add', '写文档']);",
-    "cp.execFileSync(process.execPath, ['todo.js', 'add', '修bug']);",
-    "let list = lines(cp.execFileSync(process.execPath, ['todo.js', 'list'], {encoding:'utf8'}));",
-    "assert.strictEqual(list.length, 2);",
-    "assertTodoLine(list[0], 1, '写文档', false);",
-    "assertTodoLine(list[1], 2, '修bug', false);",
-    "cp.execFileSync(process.execPath, ['todo.js', 'done', '1']);",
-    "list = lines(cp.execFileSync(process.execPath, ['todo.js', 'list'], {encoding:'utf8'}));",
-    "assert.strictEqual(list.length, 2);",
-    "assertTodoLine(list[0], 1, '写文档', true);",
-    "assertTodoLine(list[1], 2, '修bug', false);",
-    "console.log('ALL TESTS PASS');",
-    '',
-  ].join('\n'));
-  return runCommand(process.execPath, [testPath], { cwd: workspaceDir, timeoutMs: 30000 });
-}
-
-function readsNamedFile(source, fileName) {
-  const escaped = fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  if (new RegExp(`(?:readFileSync|require)\\s*\\([^;\\n]{0,160}${escaped}`).test(source)) return true;
-  const assignment = new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*[^;\\n]{0,160}${escaped}`, 'g');
-  return [...source.matchAll(assignment)].some(([, variable]) => (
-    new RegExp(`(?:readFileSync|require)\\s*\\(\\s*${variable}\\b`).test(source)
-  ));
-}
-
-function readsTodoJsonViaExport(testJs, todoJs) {
-  if (!/(?:readFileSync|require)\s*\(\s*\w+\.TODO_FILE\b/.test(testJs)) return false;
-  return /TODO_FILE[\s\S]{0,160}todo\.json/.test(todoJs)
-    && /module\.exports[\s\S]{0,160}TODO_FILE/.test(todoJs);
-}
-
-function staticCheckLongTask(workspaceDir) {
-  try {
-    const testJs = fs.readFileSync(path.join(workspaceDir, 'test.js'), 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/^\s*\/\/.*$/gm, '');
-    const todoJs = fs.existsSync(path.join(workspaceDir, 'todo.js'))
-      ? fs.readFileSync(path.join(workspaceDir, 'todo.js'), 'utf8')
-      : '';
-    return {
-      usesAssert: /require\(['"]assert['"]\)/.test(testJs),
-      readsTodoJs: /(?:execFileSync|spawnSync|execSync)[\s\S]{0,160}todo\.js/.test(testJs)
-        || readsNamedFile(testJs, 'todo.js'),
-      readsTodoJson: readsNamedFile(testJs, 'todo.json') || readsTodoJsonViaExport(testJs, todoJs),
-    };
-  } catch {
-    return { usesAssert: false, readsTodoJs: false, readsTodoJson: false };
-  }
 }
 
 function writeClientReport(result, options = {}) {
@@ -774,6 +595,8 @@ function writeClientReport(result, options = {}) {
     `- Model: ${result.model || '-'}`,
     `- Started: ${result.startedAt}`,
     `- Finished: ${result.finishedAt}`,
+    `- Token requests: ${result.tokenUsage?.requests || 0}`,
+    `- Tokens: input=${result.tokenUsage?.inputTokens || 0}, output=${result.tokenUsage?.outputTokens || 0}, total=${result.tokenUsage?.totalTokens || 0}, missing=${result.tokenUsage?.missingUsageCount || 0}`,
     '',
     '| Case | Status | Assertions | Duration |',
     '|---|---|---:|---:|',
@@ -798,18 +621,24 @@ const TRUE_KEY_MAX_ATTEMPTS = Math.max(1, Number(process.env.CLIENT_E2E_MAX_ATTE
 
 async function runTargetWithRetry(ctx, target) {
   const runFn = target.startsWith('claude') ? runClaudeTarget : runCodexTarget;
-  const attemptHistory = [];
+  const attemptResults = [];
   let result;
   for (let attempt = 1; attempt <= TRUE_KEY_MAX_ATTEMPTS; attempt++) {
     result = await runFn(ctx, target);
-    attemptHistory.push({ attempt, status: result.status, durationMs: result.durationMs });
+    attemptResults.push({ attempt, ...result });
     if (result.status === 'PASS') break;
     if (attempt < TRUE_KEY_MAX_ATTEMPTS) {
       console.error(`[true-key retry] ${target} attempt ${attempt}/${TRUE_KEY_MAX_ATTEMPTS} -> FAIL，重试中…`);
     }
   }
-  result.attempts = attemptHistory.length;
-  result.attemptHistory = attemptHistory;
+  result.attempts = attemptResults.length;
+  result.attemptHistory = attemptResults.map(item => ({
+    attempt: item.attempt,
+    status: item.status,
+    durationMs: item.durationMs,
+    tokenUsage: compactTokenUsage(item.tokenUsage),
+  }));
+  result.tokenUsage = mergeTokenUsage(attemptResults.map(item => item.tokenUsage));
   return result;
 }
 
@@ -818,11 +647,11 @@ async function runTrueKeyClient(options = {}) {
   if (!provider) throw new Error('unknown provider');
   const apiKey = Object.prototype.hasOwnProperty.call(options, 'apiKey') ? options.apiKey : process.env[provider.apiKeyEnv];
   const targets = trueTargets(options.targets);
-  const model = options.model || selectedModel();
+  const model = options.model || selectedModel(provider);
   const thinking = options.thinking || selectedThinking();
   const effort = options.effort || selectedEffort();
   if (!apiKey) {
-    return { providerId: provider.id, mode: 'true-key', status: 'BLOCKED', passed: false, failureClass: 'provider', message: `${provider.apiKeyEnv} is required`, positiveAssertions: 1, cases: [] };
+    return { providerId: provider.id, mode: 'true-key', status: 'BLOCKED', passed: false, failureClass: 'provider', message: `${provider.apiKeyEnv} is required`, positiveAssertions: 1, tokenUsage: emptyTokenUsage(), cases: [] };
   }
   const runAsUser = targets.some(target => target.startsWith('claude')) ? await linuxClientUser() : null;
   if (runAsUser) {
@@ -840,7 +669,7 @@ async function runTrueKeyClient(options = {}) {
   const bins = { claude: process.env.CLIENT_E2E_CLAUDE_BIN || 'claude', codex: process.env.CLIENT_E2E_CODEX_BIN || 'codex' };
   const pf = await preflight(targets, bins);
   if (!pf.ok) {
-    return { providerId: provider.id, mode: 'true-key', status: 'BLOCKED', passed: false, failureClass: 'preflight', message: pf.errors.join('; '), versions: pf.versions, positiveAssertions: 1, cases: [] };
+    return { providerId: provider.id, mode: 'true-key', status: 'BLOCKED', passed: false, failureClass: 'preflight', message: pf.errors.join('; '), versions: pf.versions, positiveAssertions: 1, tokenUsage: emptyTokenUsage(), cases: [] };
   }
 
   const tmpRoot = makeTempRoot('deepseek-client-e2e-real-');
@@ -857,6 +686,7 @@ async function runTrueKeyClient(options = {}) {
     effortTiers: provider.thinkingEfforts || [], // 空=无 effort 档（zai/kimi）→ gatewayFieldsMatch 期望 effort=-
     model,
     port: randomPort(),
+    providerId: provider.id,
     runId: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     startedAt: new Date().toISOString(),
     thinking,
@@ -898,6 +728,7 @@ async function runTrueKeyClient(options = {}) {
     expectedGatewayHealth: expectedHealth(ctx),
     gatewayHealthPassed: ctx.gatewayHealthPassed,
     positiveAssertions: ctx.cases.reduce((sum, c) => sum + (c.positiveAssertions || 0), 0),
+    tokenUsage: mergeTokenUsage(ctx.cases.map(item => item.tokenUsage)),
     configSnapshots: { before, after },
     configChanges: diffSnapshots(before, after),
     secretScan: [],

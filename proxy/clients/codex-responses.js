@@ -17,6 +17,7 @@
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
+const { formatUsageForLog, normalizeUsage, toResponsesUsage } = require('../usage');
 
 function generateCallId() {
   return `call_${crypto.randomBytes(12).toString('hex')}`;
@@ -193,11 +194,8 @@ function streamChatToResponses(res, requestSpec, streamMode, deps) {
     const sortedTcs = [...toolCallsByIndex.entries()].sort(([a], [b]) => a - b);
     for (const [, tc] of sortedTcs) closeToolCallItem(tc);
 
-    const usage = responseUsage ? {
-      input_tokens: responseUsage.prompt_tokens || 0,
-      output_tokens: responseUsage.completion_tokens || 0,
-      total_tokens: responseUsage.total_tokens || 0,
-    } : null;
+    const normalizedUsage = normalizeUsage(responseUsage);
+    const usage = toResponsesUsage(normalizedUsage);
     const messageOutputs = outputItems.filter(it => it.type === 'message');
     const response = {
       id: responseId, object: 'response', created_at: createdAt, status: 'completed',
@@ -217,10 +215,10 @@ function streamChatToResponses(res, requestSpec, streamMode, deps) {
     const tcCount = outputItems.filter(it => it.type === 'function_call').length;
     const elapsed = Date.now() - reqStartTs;
     log(
-      `RESPONSES_DONE id=${responseId} effort=${chatPayload.reasoning_effort} `
+      `RESPONSES_DONE id=${responseId} model=${chatPayload.model} effort=${chatPayload.reasoning_effort} `
       + `thinking=${reasoningChars > 0 ? `Y(${reasoningChars}chars)` : 'N'} `
       + `text=${textChars}chars tools=${tcCount} `
-      + `usage=${usage ? `${usage.input_tokens}/${usage.output_tokens}` : 'none'} `
+      + `${formatUsageForLog(normalizedUsage)} `
       + `${elapsed}ms`
     );
     if (captureThinking && reasoningText) captureThinking(responseId, reasoningText);

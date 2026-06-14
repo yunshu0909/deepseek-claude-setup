@@ -16,11 +16,18 @@ const { spawn } = require('child_process');
 const { getProviderProfile } = require('./certification/provider-profiles');
 const { makeTempRoot, randomPort, removeIfExists, requestJson } = require('./certification/runner-utils');
 const { redactText } = require('./certification/report-writer');
+const { emptyTokenUsage, parseGatewayLogUsage } = require('./lib/token-usage');
 
-function modelFromName(name) {
-  if (name === 'flash') return 'deepseek-v4-flash';
-  if (name === 'pro') return 'deepseek-v4-pro';
-  return name || 'deepseek-v4-pro';
+/**
+ * 按 provider profile 解析 smoke 模型别名。
+ * @param {string|undefined} name - pro / flash / 完整模型 id。
+ * @param {object} profile - provider 认证档案。
+ * @returns {string} 实际模型 id。
+ */
+function modelFromName(name, profile) {
+  if (name === 'flash') return profile.flashModel;
+  if (!name || name === 'pro') return profile.defaultModel;
+  return name;
 }
 
 async function startProxy({ tmpRoot, port, config, env = {} }) {
@@ -59,6 +66,14 @@ async function stopProxy(child, port) {
   if (!child.killed) child.kill();
 }
 
+function readTokenUsage(logPath, defaults) {
+  try {
+    return parseGatewayLogUsage(fs.readFileSync(logPath, 'utf8'), defaults);
+  } catch {
+    return emptyTokenUsage();
+  }
+}
+
 async function runSmoke(options = {}) {
   const providerId = options.providerId || process.env.PROVIDER_SMOKE_PROVIDER || 'deepseek';
   const profile = getProviderProfile(providerId);
@@ -71,12 +86,14 @@ async function runSmoke(options = {}) {
       failureClass: 'provider',
       message: `${profile.apiKeyEnv} is required`,
       positiveAssertions: 1,
+      tokenUsage: emptyTokenUsage(),
     };
   }
 
   const tmpRoot = makeTempRoot('deepseek-provider-smoke-');
   const port = randomPort();
-  const smokeModel = modelFromName(options.model || process.env.PROVIDER_SMOKE_MODEL || profile.defaultModel);
+  const logPath = path.join(tmpRoot, 'gateway.log');
+  const smokeModel = modelFromName(options.model || process.env.PROVIDER_SMOKE_MODEL || profile.defaultModel, profile);
   // v1.6.1：多 provider 配置——apiKey/model 必须落在 providers.[id]（顶层会被 runtime-config 归一成 deepseek）。
   const config = {
     activeProvider: providerId,
@@ -92,11 +109,12 @@ async function runSmoke(options = {}) {
     status: 'FAIL',
     passed: false,
     positiveAssertions: 0,
+    tokenUsage: emptyTokenUsage(),
     checks: {},
   };
   let proxy = null;
   try {
-    proxy = await startProxy({ tmpRoot, port, config });
+    proxy = await startProxy({ tmpRoot, port, config, env: { DEEPSEEK_CLAUDE_LOG_PATH: logPath } });
     const health = await requestJson({ port, requestPath: '/__health', method: 'GET' });
     result.checks.health = {
       model: health.json?.model,
@@ -149,11 +167,21 @@ async function runSmoke(options = {}) {
     result.status = 'PASS';
     result.passed = true;
     result.message = 'provider smoke passed';
+    result.tokenUsage = readTokenUsage(logPath, {
+      source: 'provider-smoke',
+      providerId,
+      model: smokeModel,
+    });
     return result;
   } catch (err) {
     result.status = 'FAIL';
     result.failureClass = /HTTP 4|HTTP 5/.test(err.message) ? 'provider' : 'gateway';
     result.message = err.message;
+    result.tokenUsage = readTokenUsage(logPath, {
+      source: 'provider-smoke',
+      providerId,
+      model: smokeModel,
+    });
     return result;
   } finally {
     if (proxy) await stopProxy(proxy.child, port);
@@ -172,5 +200,6 @@ if (require.main === module) {
 }
 
 module.exports = {
+  modelFromName,
   runSmoke,
 };
