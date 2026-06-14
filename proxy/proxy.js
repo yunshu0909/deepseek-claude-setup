@@ -97,6 +97,22 @@ function resolvedEffort() {
   return gateway.normalizeEffort(CONFIG.effort || 'max');
 }
 
+function positiveInteger(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+function resolvedResponseMaxOutputTokens(payload) {
+  return positiveInteger(payload.max_output_tokens)
+    || positiveInteger(payload.max_completion_tokens)
+    || positiveInteger(payload.max_tokens);
+}
+
+function loggedMaxTokens(body) {
+  return body.max_completion_tokens || body.max_tokens || '-';
+}
+
 function healthBody() {
   const model = CONFIG.model || providerDefaultModel();
   const thinking = resolvedThinking(model);
@@ -129,6 +145,8 @@ function handleResponses(req, res, payload) {
     tools,
     thinking,
     effort: resolvedEffort(),
+    source: 'responses',
+    maxOutputTokens: resolvedResponseMaxOutputTokens(payload),
     // Codex Responses 路径上游必须流式（codex-responses 解析 SSE delta）；客户端 stream:false 由下面
     // streamMode='json' 单独聚合，绝不能把 stream:false 透传给上游（否则 DeepSeek 返回非 SSE → empty_stream）。对齐 v1.5.0。
     stream: true,
@@ -139,7 +157,7 @@ function handleResponses(req, res, payload) {
 
   const streamMode = payload.stream !== false ? 'stream' : 'json';
   const inputTypes = (payload.input || []).map(it => it.type + (it.role ? ':' + it.role : '')).join(',');
-  log(`RESPONSES stream=${streamMode} model=${requestSpec.body.model} msgs=${requestSpec.body.messages.length} tools=${!!tools} thinking=${thinking} effort=${requestSpec.body.reasoning_effort || '-'} input=[${inputTypes}]`);
+  log(`RESPONSES stream=${streamMode} model=${requestSpec.body.model} msgs=${requestSpec.body.messages.length} tools=${!!tools} max_tokens=${loggedMaxTokens(requestSpec.body)} thinking=${thinking} effort=${requestSpec.body.reasoning_effort || '-'} input=[${inputTypes}]`);
 
   codexResponses.streamChatToResponses(res, requestSpec, streamMode, {
     parseChunk: parsed => provider.parseChatStreamChunk(parsed),
@@ -178,6 +196,7 @@ function handleChatCompletions(req, res, payload) {
     tools: payload.tools,
     thinking,
     effort: resolvedEffort(),
+    source: 'chat',
     stream: payload.stream !== false,
   });
   const requestSpec = provider.buildChatRequestSpec(gatewayRequest, activeProviderConfig());
@@ -305,7 +324,7 @@ function handleChatCompletions(req, res, payload) {
   log(
     `CHAT_POST ${req.url} model=${payload.model || '?'}->${requestSpec.body.model} `
     + `msgs=${requestSpec.body.messages.length} tools=${Array.isArray(requestSpec.body.tools) ? requestSpec.body.tools.length : 0} `
-    + `max_tokens=${requestSpec.body.max_tokens || '-'} thinking=${thinking} effort=${requestSpec.body.reasoning_effort || '-'}`
+    + `max_tokens=${loggedMaxTokens(requestSpec.body)} thinking=${thinking} effort=${requestSpec.body.reasoning_effort || '-'}`
   );
   attempt(requestSpec.body, true);
 }

@@ -329,7 +329,12 @@ function baselineHas(execution, pattern) {
 }
 
 async function appendStageTwoCases(profile, testCases, apiKey, execution) {
-  const capture = await runCaptureMatrix({ providerId: profile.id, sequence: 'claude:pro:on:high -> claude:pro:on:max -> claude:flash:off:- -> codex:pro:on:max -> codex:flash:off:- -> codex:pro:on:high' });
+  const capture = await runCaptureMatrix({
+    providerId: profile.id,
+    model: profile.defaultModel,
+    flashModel: profile.flashModel,
+    sequence: 'claude:pro:on:high -> claude:pro:on:max -> claude:flash:off:- -> codex:pro:on:max -> codex:flash:off:- -> codex:pro:on:high',
+  });
   const captureEvidence = writeEvidence(execution, 'capture-matrix.json', JSON.stringify(capture, null, 2));
   appendCaptureCases({ profile, testCases, capture, evidenceRef: captureEvidence, resultFor });
   const claudeCommand = await runClientEvidence(execution, { providerId: profile.id, apiKey, targets: 'claude-command', model: profile.defaultModel, thinking: 'enabled', effort: 'max' });

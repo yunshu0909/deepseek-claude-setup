@@ -28,6 +28,8 @@
 const gateway = require('../gateway');
 
 const DEFAULT_MODEL = 'kimi-k2.6';
+const K2_7_CODE_MODEL = 'kimi-k2.7-code';
+const K2_7_CODE_TOOL_MAX_COMPLETION_TOKENS = 8192;
 const DEFAULTS = {
   baseUrl: 'https://api.moonshot.cn/v1',
   chatPath: '/chat/completions',
@@ -50,7 +52,7 @@ const kimi = gateway.attachAdapter({
   defaultModel: DEFAULT_MODEL,
   models: [
     { id: 'kimi-k2.6', label: 'kimi-k2.6（通用/多模态/Agent）', hint: '推荐' },
-    { id: 'kimi-k2.7-code', label: 'kimi-k2.7-code（Coding/Agent，始终开启思考）' },
+    { id: K2_7_CODE_MODEL, label: 'kimi-k2.7-code（Coding/Agent，始终开启思考）' },
     { id: 'kimi-k2.5', label: 'kimi-k2.5（均衡/轻量）' },
   ],
   defaults: DEFAULTS,
@@ -87,13 +89,24 @@ kimi.parseChatStreamChunk = function parseChatStreamChunk(parsed) {
   return baseParse(parsed);
 };
 
+const baseBuildChatRequestSpec = kimi.buildChatRequestSpec;
+kimi.buildChatRequestSpec = function buildChatRequestSpec(gatewayRequest, providerConfig) {
+  const spec = baseBuildChatRequestSpec(gatewayRequest, providerConfig);
+  const isCodexToolRequest = gatewayRequest?.source === 'responses' && Array.isArray(spec.body.tools) && spec.body.tools.length > 0;
+  if (spec.body.model === K2_7_CODE_MODEL && isCodexToolRequest && !spec.body.max_completion_tokens && !spec.body.max_tokens) {
+    // K2.7 Code long tool calls can spend the provider's low implicit budget on reasoning and truncate tool args.
+    spec.body.max_completion_tokens = gatewayRequest.maxOutputTokens || K2_7_CODE_TOOL_MAX_COMPLETION_TOKENS;
+  }
+  return spec;
+};
+
 /**
  * Kimi K2.7 Code 官方要求 thinking.type 只能是 enabled；发送 disabled 会 400。
  * @param {{model:string,thinking:string}} runtime - 当前模型与用户请求的 thinking。
  * @returns {string} 实际发送给上游并展示在 health/log 中的 thinking。
  */
 kimi.resolveThinking = function resolveThinking(runtime) {
-  if (runtime?.model === 'kimi-k2.7-code' && runtime.thinking === 'disabled') return 'enabled';
+  if (runtime?.model === K2_7_CODE_MODEL && runtime.thinking === 'disabled') return 'enabled';
   return runtime?.thinking || 'enabled';
 };
 

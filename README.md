@@ -2,7 +2,7 @@
 
 让 Claude Code、OpenAI Codex CLI 和 Hermes Agent 透明使用 DeepSeek、智谱 BigModel、Kimi 模型，且**思考模式真的生效**。
 
-> ✅ 当前版本（v1.6.3）已支持 **3 个 provider**：DeepSeek、智谱 BigModel、Kimi（Moonshot）。配置向导支持保存自定义模型 ID；三家都跑过同一套真实客户端认证（详见底部「支持的 Provider」与路线图），认证报告会记录真实 API token 用量。
+> ✅ 当前版本（v1.6.4）已支持 **3 个 provider**：DeepSeek、智谱 BigModel、Kimi（Moonshot）。配置向导支持保存自定义模型 ID；三家都跑过同一套真实客户端认证（详见底部「支持的 Provider」与路线图），认证报告会记录真实 API token 用量。
 
 ---
 
@@ -16,7 +16,7 @@
 | **智谱 BigModel** | `zai` | open.bigmodel.cn | glm-5.1 / glm-5 / glm-5-turbo / glm-4.7 / glm-4.5-air | ✅ | ❌（向导自动跳过强度选择） |
 | **Kimi（Moonshot）** | `kimi` | api.moonshot.cn | kimi-k2.6 / kimi-k2.7-code / kimi-k2.5 | ✅ | ❌（向导自动跳过强度选择） |
 
-> 智谱 / Kimi 支持思考模式但没有 effort 强度档，向导检测到 `thinkingEffort:false` 会自动跳过强度选择；只有 DeepSeek 会让你选 high / max。Kimi `kimi-k2.7-code` 官方要求始终开启 thinking，本工具会在该模型下把 `disabled` 请求提升为 effective `enabled`，避免上游 400。
+> 智谱 / Kimi 支持思考模式但没有 effort 强度档，向导检测到 `thinkingEffort:false` 会自动跳过强度选择；只有 DeepSeek 会让你选 high / max。Kimi `kimi-k2.7-code` 官方要求始终开启 thinking，本工具会在该模型下把 `disabled` 请求提升为 effective `enabled`，避免上游 400；Codex Responses 工具请求会补 `max_completion_tokens=8192`，避免长任务把默认输出预算耗在 thinking 后截断工具参数。
 
 三家 provider 都经过**同一套 56 例真实客户端认证**（真 Claude Code + 真 Codex + Hermes 打真实 API，非 capture 演习）：macOS 上 DeepSeek / 智谱 / Kimi 各 55/55 PASS，Linux 上 DeepSeek 55/55 PASS。
 
@@ -342,7 +342,7 @@ Windows 报告可由 Windows 真机单独生成后人工合并；release gate �
 npm test
 ```
 
-129 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、自定义模型 ID 保存、Kimi K2.7 Code thinking 规则、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 provider certification 的报告、release gate、capability-aware capture runner、true-key runner、Linux Hermes runner 和 tokenUsage 汇总。
+134 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、自定义模型 ID 保存、Kimi K2.7 Code thinking 与 Codex 长工具预算规则、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 provider certification 的报告、release gate、capability-aware capture runner、true-key runner、Linux Hermes runner、认证 runner stdio 兜底和 tokenUsage 汇总。
 
 测试使用临时目录 + 本地假 DeepSeek 上游，**不调用真实 API，不修改真实 `~/.claude` / `~/.codex` / Hermes 配置**。
 
@@ -415,6 +415,7 @@ systemctl daemon-reload 2>/dev/null
 - ✅ **接入智谱 + Kimi（v1.6.1）** — 新增 `proxy/providers/zai.js` / `proxy/providers/kimi.js` 两个 adapter，向导第一步可选 Provider；三家共用同一套真实客户端认证
 - ✅ **认证可信度 + Token usage（v1.6.2）** — 修复非 DeepSeek provider capture 假绿，认证断言改为 capability-aware；`certify:provider` 支持 `--model` / `--flash-model`，报告新增真实 API tokenUsage 汇总
 - ✅ **自定义模型保存 + Kimi K2.7 Code（v1.6.3）** — 向导支持保存 provider 级自定义模型 ID；Kimi 内置可选 `kimi-k2.7-code`，并处理其 thinking 只能 enabled 的上游约束；智谱补入真测通过的 `glm-4.5-air`
+- ✅ **Kimi K2.7 Code Codex 长任务认证修复（v1.6.4）** — K2.7 Code 的 Codex 工具请求补安全输出预算，修复完整认证曾卡在 TC-037 的问题；认证 capture 正确尊重 `--model/--flash-model` override
 
 下一步：
 

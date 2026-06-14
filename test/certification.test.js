@@ -415,6 +415,19 @@ async function run() {
     assert.strictEqual(result.steps[1].health.provider, 'kimi');
     assert.strictEqual(result.steps[1].requests[0].body.reasoning_effort, undefined);
   });
+  await check('capture matrix honors explicit certification model overrides', async () => {
+    const result = await runCaptureMatrix({
+      providerId: 'kimi',
+      model: 'kimi-k2.7-code',
+      flashModel: 'kimi-k2.5',
+      sequence: 'claude:pro:on:max -> codex:pro:on:max -> claude:flash:off:-',
+    });
+    assert.strictEqual(result.passed, true);
+    assert.strictEqual(result.steps[0].health.model, 'kimi-k2.7-code');
+    assert.strictEqual(result.steps[0].requests[0].body.model, 'kimi-k2.7-code');
+    assert.strictEqual(result.steps[1].requests[0].body.model, 'kimi-k2.7-code');
+    assert.strictEqual(result.steps[2].requests[0].body.model, 'kimi-k2.5');
+  });
   check('long task round gate is bounded to ten tool rounds', () => {
     assert.strictEqual(LONG_TASK_MIN_TOOL_ROUNDS, 2);
     assert.strictEqual(LONG_TASK_MAX_TOOL_ROUNDS, 10);
@@ -487,6 +500,19 @@ async function run() {
     assert.strictEqual(result.status, 124);
     assert.strictEqual(result.timedOut, true);
     assert.match(result.stderr, /TIMEOUT/);
+  });
+  await check('runner resolves after main process exit even if inherited stdio stays open', async () => {
+    const script = [
+      "const { spawn } = require('child_process');",
+      `const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });`,
+      'child.unref();',
+      "console.log('parent-done');",
+    ].join('\n');
+    const result = await runCommand(process.execPath, ['-e', script], { timeoutMs: 5000, exitGraceMs: 50 });
+    assert.strictEqual(result.status, 0);
+    assert.strictEqual(result.timedOut, false);
+    assert.match(result.stdout, /parent-done/);
+    assert(result.durationMs < 2000, `expected exit fallback before grandchild closes stdio, got ${result.durationMs}ms`);
   });
 
   console.log('\n-- true-key and linux runners --');

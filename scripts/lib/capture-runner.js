@@ -140,7 +140,10 @@ async function runCaptureMatrix(options = {}) {
   if (!provider) throw new Error('unknown provider');
   const providerDef = providerRegistry.getProvider(provider.id);
   if (!providerDef) throw new Error(`provider adapter not registered: ${provider.id}`);
-  const seqModels = { pro: provider.defaultModel, flash: provider.flashModel };
+  const seqModels = {
+    pro: options.model || provider.defaultModel,
+    flash: options.flashModel || provider.flashModel,
+  };
   const steps = parseSequence(options.sequence, seqModels).length ? parseSequence(options.sequence, seqModels) : parseSequence('codex:pro:on:max', seqModels);
   const results = await runCaptureSequence(steps, providerDef);
   let positiveAssertions = 0;

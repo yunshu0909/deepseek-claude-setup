@@ -38,6 +38,8 @@ function runCommand(command, args = [], options = {}) {
   return new Promise(resolve => {
     const started = Date.now();
     let timedOut = false;
+    let settled = false;
+    let exitFallback = null;
     const child = spawn(command, args, {
       cwd: options.cwd || process.cwd(),
       env: { ...process.env, ...(options.env || {}) },
@@ -47,6 +49,19 @@ function runCommand(command, args = [], options = {}) {
     });
     let stdout = '';
     let stderr = '';
+    function finish(status, destroyPipes = false) {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      if (exitFallback) clearTimeout(exitFallback);
+      if (destroyPipes) {
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }
+      const exitStatus = timedOut ? 124 : status;
+      resolve({ status: exitStatus, code: exitStatus, durationMs: Date.now() - started, stdout, stderr, timedOut });
+    }
+
     const timeout = options.timeoutMs
       ? setTimeout(() => {
         timedOut = true;
@@ -58,13 +73,18 @@ function runCommand(command, args = [], options = {}) {
     child.stderr.on('data', chunk => { stderr += chunk.toString(); });
     child.on('error', err => {
       if (timeout) clearTimeout(timeout);
+      if (exitFallback) clearTimeout(exitFallback);
+      if (settled) return;
+      settled = true;
       resolve({ status: 127, code: 127, durationMs: Date.now() - started, stdout, stderr: `${stderr}\n${err.message}`.trim(), error: err });
     });
-    child.on('close', status => {
-      if (timeout) clearTimeout(timeout);
-      const exitStatus = timedOut ? 124 : status;
-      resolve({ status: exitStatus, code: exitStatus, durationMs: Date.now() - started, stdout, stderr, timedOut });
+    child.on('exit', status => {
+      // Some CLI test commands spawn grandchildren that inherit stdio; their main process exits, but Node's
+      // `close` can wait for those inherited pipes indefinitely. Use `close` when it arrives, and fall back to
+      // the process exit code after a short drain window so certification does not false-timeout.
+      exitFallback = setTimeout(() => finish(status, true), options.exitGraceMs || 1000);
     });
+    child.on('close', status => finish(status));
   });
 }
 

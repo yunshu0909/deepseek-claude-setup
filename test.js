@@ -23,6 +23,7 @@ const codexPatcher = require('./src/codex-patcher');
 const proxyManager = require('./src/proxy-manager');
 const ui = require('./src/ui');
 const providerRegistry = require('./proxy/providers');
+const gateway = require('./proxy/gateway');
 
 let passed = 0;
 let failed = 0;
@@ -236,6 +237,70 @@ async function run() {
     assert.ok(kimiProvider.models.some(model => model.id === 'kimi-k2.7-code'));
     assert.strictEqual(kimiProvider.resolveThinking({ model: 'kimi-k2.7-code', thinking: 'disabled' }), 'enabled');
     assert.strictEqual(kimiProvider.resolveThinking({ model: 'kimi-k2.6', thinking: 'disabled' }), 'disabled');
+  });
+  check('Kimi K2.7 Code Codex tool requests get a safe completion token budget', () => {
+    const kimiProvider = providerRegistry.getProvider('kimi');
+    const tool = { type: 'function', function: { name: 'exec_command', parameters: { type: 'object', properties: {} } } };
+    const request = gateway.makeGatewayRequest({
+      model: 'kimi-k2.7-code',
+      messages: [{ role: 'user', content: 'write files' }],
+      tools: [tool],
+      thinking: 'enabled',
+      effort: 'max',
+      stream: true,
+      source: 'responses',
+    });
+    const spec = kimiProvider.buildChatRequestSpec(request, { apiKey: 'moonshot-test-key' });
+    assert.strictEqual(spec.body.max_completion_tokens, 8192);
+  });
+  check('Kimi K2.7 Code respects explicit Responses output budget', () => {
+    const kimiProvider = providerRegistry.getProvider('kimi');
+    const tool = { type: 'function', function: { name: 'exec_command', parameters: { type: 'object', properties: {} } } };
+    const request = gateway.makeGatewayRequest({
+      model: 'kimi-k2.7-code',
+      messages: [{ role: 'user', content: 'write files' }],
+      tools: [tool],
+      thinking: 'enabled',
+      effort: 'max',
+      stream: true,
+      source: 'responses',
+      maxOutputTokens: 4096,
+    });
+    const spec = kimiProvider.buildChatRequestSpec(request, { apiKey: 'moonshot-test-key' });
+    assert.strictEqual(spec.body.max_completion_tokens, 4096);
+  });
+  check('Kimi completion budget fallback is limited to K2.7 Codex tool requests', () => {
+    const kimiProvider = providerRegistry.getProvider('kimi');
+    const tool = { type: 'function', function: { name: 'exec_command', parameters: { type: 'object', properties: {} } } };
+    const k26 = kimiProvider.buildChatRequestSpec(gateway.makeGatewayRequest({
+      model: 'kimi-k2.6',
+      messages: [{ role: 'user', content: 'write files' }],
+      tools: [tool],
+      thinking: 'enabled',
+      effort: 'max',
+      stream: true,
+      source: 'responses',
+    }), { apiKey: 'moonshot-test-key' });
+    const noTools = kimiProvider.buildChatRequestSpec(gateway.makeGatewayRequest({
+      model: 'kimi-k2.7-code',
+      messages: [{ role: 'user', content: 'hello' }],
+      thinking: 'enabled',
+      effort: 'max',
+      stream: true,
+      source: 'responses',
+    }), { apiKey: 'moonshot-test-key' });
+    const chatTool = kimiProvider.buildChatRequestSpec(gateway.makeGatewayRequest({
+      model: 'kimi-k2.7-code',
+      messages: [{ role: 'user', content: 'write files' }],
+      tools: [tool],
+      thinking: 'enabled',
+      effort: 'max',
+      stream: true,
+      source: 'chat',
+    }), { apiKey: 'moonshot-test-key' });
+    assert.strictEqual(k26.body.max_completion_tokens, undefined);
+    assert.strictEqual(noTools.body.max_completion_tokens, undefined);
+    assert.strictEqual(chatTool.body.max_completion_tokens, undefined);
   });
 
   console.log('\n-- settings-patcher --');

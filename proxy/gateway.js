@@ -36,10 +36,10 @@
  * adapter 负责把它 lower 成具体 provider 的上游请求体。
  *
  * 最小结构：
- *   { model, conversation:CanonicalConversation, tools, thinking, effort, stream }
+ *   { model, conversation:CanonicalConversation, tools, thinking, effort, stream, source, maxOutputTokens }
  *
  * @typedef {{model:string,conversation:object,tools:(object[]|undefined),
- *   thinking:string,effort:string,stream:boolean}} GatewayRequest
+ *   thinking:string,effort:string,stream:boolean,source:string,maxOutputTokens:number|undefined}} GatewayRequest
  */
 
 /**
@@ -50,7 +50,7 @@
  * @typedef {{messages:object[]}} CanonicalConversation
  */
 
-function makeGatewayRequest({ model, messages, tools, thinking, effort, stream }) {
+function makeGatewayRequest({ model, messages, tools, thinking, effort, stream, source, maxOutputTokens }) {
   return {
     model,
     conversation: { messages },
@@ -58,6 +58,8 @@ function makeGatewayRequest({ model, messages, tools, thinking, effort, stream }
     thinking,
     effort,
     stream: stream !== false,
+    source,
+    maxOutputTokens,
   };
 }
 
