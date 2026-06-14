@@ -2,13 +2,13 @@
 
 让 Claude Code、OpenAI Codex CLI 和 Hermes Agent 透明使用 DeepSeek、智谱 BigModel、Kimi 模型，且**思考模式真的生效**。
 
-> ✅ 当前版本（v1.6.4）已支持 **3 个 provider**：DeepSeek、智谱 BigModel、Kimi（Moonshot）。配置向导支持保存自定义模型 ID；三家都跑过同一套真实客户端认证（详见底部「支持的 Provider」与路线图），认证报告会记录真实 API token 用量。
+> ✅ 当前版本（v1.6.5）已支持 **3 个 provider**：DeepSeek、智谱 BigModel、Kimi（Moonshot）。配置向导支持内置模型只读 + 用户自定义模型增删改查；三家都跑过同一套真实客户端认证（详见底部「支持的 Provider」与路线图），认证报告会记录真实 API token 用量。
 
 ---
 
 ## 支持的 Provider
 
-配置向导**第一步就是选 Provider**，选好后输该 provider 的 API Key、选模型，再决定接入 Claude Code / Codex / Hermes 哪几个客户端。模型选择支持内置推荐列表，也支持直接输入自定义模型 ID；新增 provider 只需在 registry 注册一个 adapter，向导自动展开。
+配置向导**第一步就是选 Provider**，选好后输该 provider 的 API Key、选模型，再决定接入 Claude Code / Codex / Hermes 哪几个客户端。模型选择分为内置模型组和用户自定义模型组：内置模型只能选择，用户自定义模型支持新增、修改、删除和复选；新增 provider 只需在 registry 注册一个 adapter，向导自动展开。
 
 | Provider | id | 默认端点 | 模型示例 | 思考模式 | 思考强度档（effort） |
 |---|---|---|---|---|---|
@@ -50,7 +50,7 @@ Hermes Agent 默认有自己的模型配置和 provider key 管理。如果它�
 npx -y github:yunshu0909/deepseek-claude-setup
 ```
 
-**首次运行**：拉到 GitHub 最新版，进配置向导（**选 Provider（DeepSeek / 智谱 / Kimi）** → 输该 provider 的 API Key → 选内置模型或输入自定义模型 ID → 选思考模式 →（仅 DeepSeek）选思考深度），然后进主面板。
+**首次运行**：拉到 GitHub 最新版，进配置向导（**选 Provider（DeepSeek / 智谱 / Kimi）** → 输该 provider 的 API Key → 选择内置模型或管理自定义模型 → 选思考模式 →（仅 DeepSeek）选思考深度），然后进主面板。
 
 **已经装过的用户**（v1.4.0+）：每次启动自动检测 GitHub `main` 最新 commit——发现新版本就自动清 `~/.npm/_npx` 缓存 + 重新 `npx` + 重启进程，**无需手动操作**。`proxy.js` 同样会被检测内容变化并热重启代理。
 
@@ -342,7 +342,7 @@ Windows 报告可由 Windows 真机单独生成后人工合并；release gate �
 npm test
 ```
 
-134 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、自定义模型 ID 保存、Kimi K2.7 Code thinking 与 Codex 长工具预算规则、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 provider certification 的报告、release gate、capability-aware capture runner、true-key runner、Linux Hermes runner、认证 runner stdio 兜底和 tokenUsage 汇总。
+141 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、自定义模型 ID 保存与完整 CRUD、Kimi K2.7 Code thinking 与 Codex 长工具预算规则、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 provider certification 的报告、release gate、capability-aware capture runner、true-key runner、Linux Hermes runner、认证 runner stdio 兜底和 tokenUsage 汇总。
 
 测试使用临时目录 + 本地假 DeepSeek 上游，**不调用真实 API，不修改真实 `~/.claude` / `~/.codex` / Hermes 配置**。
 
@@ -416,6 +416,7 @@ systemctl daemon-reload 2>/dev/null
 - ✅ **认证可信度 + Token usage（v1.6.2）** — 修复非 DeepSeek provider capture 假绿，认证断言改为 capability-aware；`certify:provider` 支持 `--model` / `--flash-model`，报告新增真实 API tokenUsage 汇总
 - ✅ **自定义模型保存 + Kimi K2.7 Code（v1.6.3）** — 向导支持保存 provider 级自定义模型 ID；Kimi 内置可选 `kimi-k2.7-code`，并处理其 thinking 只能 enabled 的上游约束；智谱补入真测通过的 `glm-4.5-air`
 - ✅ **Kimi K2.7 Code Codex 长任务认证修复（v1.6.4）** — K2.7 Code 的 Codex 工具请求补安全输出预算，修复完整认证曾卡在 TC-037 的问题；认证 capture 正确尊重 `--model/--flash-model` override
+- ✅ **自定义模型完整 CRUD（v1.6.5）** — 内置模型组保持只读，用户自定义模型组支持新增、查看、修改、删除；删除当前自定义模型时必须显式选择替代模型
 
 下一步：
 

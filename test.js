@@ -205,14 +205,17 @@ async function run() {
   const zaiProvider = providerRegistry.getProvider('zai');
   check('model options keep a saved custom model visible', () => {
     const options = ui.buildModelOptions(zaiProvider, 'glm-5.2');
-    assert.strictEqual(options[0].value, 'glm-5.2');
-    assert.match(options[0].label, /当前自定义模型/);
-    assert.strictEqual(options[0].hint, '已保存');
-    assert.strictEqual(options[options.length - 1].value, ui.CUSTOM_MODEL_OPTION);
+    const current = options.find(option => option.value === 'glm-5.2');
+    assert.ok(current);
+    assert.match(current.label, /继续使用当前自定义模型/);
+    assert.strictEqual(current.hint, '当前 / 已保存');
+    assert.ok(options.some(option => option.value === ui.CUSTOM_MODEL_ADD_OPTION));
+    assert.ok(options.some(option => option.value === ui.CUSTOM_MODEL_MANAGE_OPTION));
   });
   check('model options do not duplicate built-in selected models', () => {
     const options = ui.buildModelOptions(zaiProvider, 'glm-5.1');
     assert.strictEqual(options.filter(option => option.value === 'glm-5.1').length, 1);
+    assert.ok(!options.some(option => option.value === ui.CUSTOM_MODEL_MANAGE_OPTION));
   });
   check('model options preserve provider-level custom models', () => {
     const options = ui.buildModelOptions(zaiProvider, 'glm-5.1', ['glm-5.2', 'glm-5.2', ' glm-custom ']);
@@ -231,6 +234,64 @@ async function run() {
     assert.strictEqual(customCfg.model, 'glm-5.2');
     assert.strictEqual(customCfg.providers.zai.model, 'glm-5.2');
     assert.deepStrictEqual(customCfg.providers.zai.customModels, ['glm-5.2']);
+  });
+  check('custom model add trims, dedupes, and ignores built-in models', () => {
+    assert.deepStrictEqual(ui.addCustomModel(zaiProvider, [' glm-old ', 'glm-old'], ' glm-new '), ['glm-new', 'glm-old']);
+    assert.deepStrictEqual(ui.addCustomModel(zaiProvider, ['glm-old'], 'glm-5.1'), ['glm-old']);
+  });
+  check('custom model rename updates current model when needed', () => {
+    const renamed = ui.renameCustomModel(zaiProvider, ['glm-old', 'glm-other'], 'glm-old', ' glm-new ', 'glm-old');
+    assert.strictEqual(renamed.model, 'glm-new');
+    assert.deepStrictEqual(renamed.customModels, ['glm-new', 'glm-other']);
+  });
+  check('custom model rename to built-in selects built-in and removes custom id', () => {
+    const renamed = ui.renameCustomModel(zaiProvider, ['glm-old'], 'glm-old', 'glm-5.1', 'glm-old');
+    assert.strictEqual(renamed.model, 'glm-5.1');
+    assert.deepStrictEqual(renamed.customModels, []);
+  });
+  check('custom model delete keeps current model when deleting another custom id', () => {
+    const deleted = ui.deleteCustomModel(zaiProvider, ['glm-old', 'glm-other'], 'glm-other', 'glm-old');
+    assert.strictEqual(deleted.model, 'glm-old');
+    assert.deepStrictEqual(deleted.customModels, ['glm-old']);
+  });
+  check('custom model delete current requires and applies replacement model', () => {
+    const blocked = ui.deleteCustomModel(zaiProvider, ['glm-old', 'glm-other'], 'glm-old', 'glm-old');
+    assert.strictEqual(blocked.model, 'glm-old');
+    assert.deepStrictEqual(blocked.customModels, ['glm-old', 'glm-other']);
+    const replaced = ui.deleteCustomModel(zaiProvider, ['glm-old', 'glm-other'], 'glm-old', 'glm-old', 'glm-other');
+    assert.strictEqual(replaced.model, 'glm-other');
+    assert.deepStrictEqual(replaced.customModels, ['glm-other']);
+    const builtInReplacement = ui.deleteCustomModel(zaiProvider, ['glm-old', 'glm-other'], 'glm-old', 'glm-old', 'glm-5.1');
+    assert.strictEqual(builtInReplacement.model, 'glm-5.1');
+    assert.deepStrictEqual(builtInReplacement.customModels, ['glm-other']);
+  });
+  check('built-in models cannot be renamed or deleted as custom models', () => {
+    const renamed = ui.renameCustomModel(zaiProvider, ['glm-old'], 'glm-5.1', 'glm-new', 'glm-5.1');
+    assert.strictEqual(renamed.model, 'glm-5.1');
+    assert.deepStrictEqual(renamed.customModels, ['glm-old']);
+    const deleted = ui.deleteCustomModel(zaiProvider, ['glm-old'], 'glm-5.1', 'glm-5.1', 'glm-old');
+    assert.strictEqual(deleted.model, 'glm-5.1');
+    assert.deepStrictEqual(deleted.customModels, ['glm-old']);
+  });
+  check('provider config keeps custom model lists isolated by provider', () => {
+    const isolatedCfg = ui.buildProviderConfig({
+      activeProvider: 'deepseek',
+      thinking: 'enabled',
+      effort: 'max',
+      providers: {
+        deepseek: { apiKey: 'sk-deepseek', model: 'ds-custom', customModels: ['ds-custom'] },
+        kimi: { apiKey: 'moonshot-key', model: 'kimi-custom', customModels: ['kimi-custom'] },
+      },
+    }, 'zai', {
+      apiKey: 'zhipu-test-key',
+      model: 'glm-custom',
+      customModels: ['glm-custom'],
+      thinking: 'enabled',
+      effort: 'max',
+    });
+    assert.deepStrictEqual(isolatedCfg.providers.deepseek.customModels, ['ds-custom']);
+    assert.deepStrictEqual(isolatedCfg.providers.kimi.customModels, ['kimi-custom']);
+    assert.deepStrictEqual(isolatedCfg.providers.zai.customModels, ['glm-custom']);
   });
   check('Kimi K2.7 Code keeps thinking enabled because upstream rejects disabled', () => {
     const kimiProvider = providerRegistry.getProvider('kimi');

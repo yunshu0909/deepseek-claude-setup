@@ -2,6 +2,7 @@ const { intro, outro, text, select, confirm, spinner, note, cancel, isCancel } =
 const configStore = require('./config-store');
 const providerRegistry = require('../proxy/providers');
 const verifier = require('./verifier');
+const modelOptions = require('./model-options');
 
 /**
  * 取当前 active provider 定义（兜底 deepseek）
@@ -101,7 +102,6 @@ function supportsEmoji() {
 const I_EMOJI = { tool: '🔧', robot: '🤖', cmd: '⌘',   hermes: '◇', brain: '🧠', dot: '🟢', circle: '○', warn: '⚠',   cog: '⚙',   cross: '✕',   bye: '👋',     wrench: '🔧', info: 'ⓘ' };
 const I_ASCII = { tool: '[ ]', robot: '[C]', cmd: '[X]', hermes: '[H]', brain: '[T]', dot: '*', circle: '○', warn: '[!]', cog: '[*]', cross: '[x]', bye: '[bye]', wrench: '[F]', info: '[i]' };
 const I = supportsEmoji() ? I_EMOJI : I_ASCII;
-const CUSTOM_MODEL_OPTION = '__deepseek_claude_custom_model__';
 
 // 第一步：选择 provider。后续接入新 provider 只需在 registry 注册，向导自动展开。
 async function stepProvider(existing) {
@@ -141,130 +141,104 @@ async function stepApiKey(provider, existing) {
   }
 }
 
-function normalizeModelId(model) {
-  return typeof model === 'string' ? model.trim() : '';
-}
-
-function normalizeCustomModels(models) {
-  const seen = new Set();
-  const result = [];
-  for (const model of Array.isArray(models) ? models : []) {
-    const id = normalizeModelId(model);
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    result.push(id);
-  }
-  return result;
-}
-
-function providerModelIds(provider) {
-  return new Set((Array.isArray(provider.models) ? provider.models : [])
-    .map(model => normalizeModelId(model?.id))
-    .filter(Boolean));
-}
-
-/**
- * 构造模型选择列表
- *
- * 内置 models 是推荐选项；已保存但未内置的自定义模型必须继续展示，避免新模型升级前被向导吞掉。
- *
- * @param {object} provider - 当前 provider 定义
- * @param {string} existing - 当前已保存模型
- * @param {string[]} customModels - 当前 provider 已保存的自定义模型
- * @returns {Array<{value: string, label: string, hint?: string}>} clack select options
- */
-function buildModelOptions(provider, existing, customModels = []) {
-  const models = Array.isArray(provider.models) ? provider.models : [];
-  const options = [];
-  const knownIds = new Set();
-
-  for (const model of models) {
-    const id = normalizeModelId(model?.id);
-    if (!id || knownIds.has(id)) continue;
-    knownIds.add(id);
-    options.push({
-      value: id,
-      label: model.label || id,
-      hint: model.hint,
-    });
-  }
-
-  const defaultModel = normalizeModelId(provider.defaultModel);
-  if (defaultModel && !knownIds.has(defaultModel)) {
-    knownIds.add(defaultModel);
-    options.push({ value: defaultModel, label: defaultModel, hint: '默认' });
-  }
-
-  const existingModel = normalizeModelId(existing);
-  const savedCustomModels = normalizeCustomModels([existingModel, ...customModels])
-    .filter(model => !knownIds.has(model));
-
-  if (existingModel && savedCustomModels.includes(existingModel)) {
-    options.unshift({
-      value: existingModel,
-      label: `当前自定义模型：${existingModel}`,
-      hint: '已保存',
-    });
-  }
-  for (const model of savedCustomModels) {
-    if (model === existingModel) continue;
-    options.push({
-      value: model,
-      label: `自定义模型：${model}`,
-      hint: '已保存',
-    });
-  }
-
-  options.push({
-    value: CUSTOM_MODEL_OPTION,
-    label: existingModel ? '输入/修改自定义模型 ID' : '输入自定义模型 ID',
-    hint: '新模型/未内置模型',
-  });
-
-  return options;
-}
-
-function addCustomModel(provider, customModels, model) {
-  const modelId = normalizeModelId(model);
-  if (!modelId || providerModelIds(provider).has(modelId)) return normalizeCustomModels(customModels);
-  return normalizeCustomModels([modelId, ...customModels]);
-}
-
-function initialModelSelection(provider, existing) {
-  return normalizeModelId(existing)
-    || normalizeModelId(provider.defaultModel)
-    || normalizeModelId(provider.models?.[0]?.id)
-    || CUSTOM_MODEL_OPTION;
-}
-
-// 第三步：选择模型。内置 models 是推荐列表；新模型可直接输入自定义 ID 并保存。
-async function stepModel(provider, existing, customModels = []) {
-  const m = await select({
-    message: '选择模型',
-    options: buildModelOptions(provider, existing, customModels),
-    initialValue: initialModelSelection(provider, existing),
-  });
-  if (isCancel(m)) return null;
-  if (m !== CUSTOM_MODEL_OPTION) return {
-    model: m,
-    customModels: addCustomModel(provider, customModels, m),
-  };
-
+async function promptCustomModel(provider, initialValue = '') {
   const customModel = await text({
     message: `输入 ${provider.displayName} 模型 ID`,
     placeholder: provider.defaultModel || provider.models?.[0]?.id || 'model-id',
-    initialValue: normalizeModelId(existing),
+    initialValue,
     validate(value) {
-      if (!normalizeModelId(value)) return '请输入模型 ID';
+      if (!modelOptions.normalizeModelId(value)) return '请输入模型 ID';
       return;
     },
   });
-  if (isCancel(customModel)) return null;
-  const model = normalizeModelId(customModel);
-  return {
-    model,
-    customModels: addCustomModel(provider, customModels, model),
-  };
+  return isCancel(customModel) ? null : modelOptions.normalizeModelId(customModel);
+}
+
+async function stepManageCustomModels(provider, currentModel, customModels) {
+  const savedCustomModels = modelOptions.customModelsForProvider(provider, currentModel, customModels);
+  if (!savedCustomModels.length) {
+    note('当前 provider 还没有自定义模型。', '自定义模型');
+    return { model: currentModel, customModels };
+  }
+
+  const action = await select({
+    message: '管理自定义模型',
+    options: modelOptions.buildManageModelOptions(provider, currentModel, customModels),
+  });
+  if (isCancel(action)) return null;
+
+  const parsed = modelOptions.parseManageModelAction(provider, currentModel, customModels, action);
+  if (parsed.type === 'return') return { model: currentModel, customModels };
+
+  if (parsed.type === 'rename' && parsed.model) {
+    const nextModel = await promptCustomModel(provider, parsed.model);
+    if (nextModel === null) return null;
+    return modelOptions.renameCustomModel(provider, customModels, parsed.model, nextModel, currentModel);
+  }
+
+  if (parsed.type === 'delete' && parsed.model) {
+    const ok = await confirm({
+      message: `删除自定义模型 ${parsed.model}？`,
+      initialValue: false,
+    });
+    if (isCancel(ok)) return null;
+    if (!ok) return { model: currentModel, customModels };
+
+    let replacement = currentModel;
+    if (modelOptions.normalizeModelId(currentModel) === parsed.model) {
+      const replacementOptions = modelOptions.buildReplacementModelOptions(provider, customModels, parsed.model);
+      if (!replacementOptions.length) {
+        note('没有可用替代模型，无法删除当前模型。', '自定义模型');
+        return { model: currentModel, customModels };
+      }
+      replacement = await select({
+        message: `删除当前模型 ${parsed.model} 后，选择替代模型`,
+        options: replacementOptions,
+        initialValue: modelOptions.initialModelSelection(provider, ''),
+      });
+      if (isCancel(replacement)) return null;
+    }
+    return modelOptions.deleteCustomModel(provider, customModels, parsed.model, currentModel, replacement);
+  }
+
+  return { model: currentModel, customModels };
+}
+
+// 第三步：选择模型。内置模型只读；用户自定义模型支持新增、修改、删除和复选。
+async function stepModel(provider, existing, customModels = []) {
+  let currentModel = modelOptions.normalizeModelId(existing);
+  let currentCustomModels = modelOptions.customModelsForProvider(provider, currentModel, customModels);
+
+  while (true) {
+    const m = await select({
+      message: '选择模型',
+      options: modelOptions.buildModelOptions(provider, currentModel, currentCustomModels),
+      initialValue: modelOptions.initialModelSelection(provider, currentModel),
+    });
+    if (isCancel(m)) return null;
+
+    if (m === modelOptions.CUSTOM_MODEL_ADD_OPTION) {
+      const model = await promptCustomModel(provider);
+      if (model === null) return null;
+      return {
+        model,
+        customModels: modelOptions.addCustomModel(provider, currentCustomModels, model),
+      };
+    }
+
+    if (m === modelOptions.CUSTOM_MODEL_MANAGE_OPTION) {
+      const managed = await stepManageCustomModels(provider, currentModel, currentCustomModels);
+      if (managed === null) return null;
+      currentModel = managed.model;
+      currentCustomModels = modelOptions.customModelsForProvider(provider, currentModel, managed.customModels);
+      continue;
+    }
+
+    return {
+      model: m,
+      customModels: currentCustomModels,
+    };
+  }
 }
 
 // 第四步：选择思考等级
@@ -709,8 +683,15 @@ module.exports = {
   disableHermes,
   diagnoseHermes,
   buildProviderConfig,
-  buildModelOptions,
-  CUSTOM_MODEL_OPTION,
+  buildModelOptions: modelOptions.buildModelOptions,
+  CUSTOM_MODEL_OPTION: modelOptions.CUSTOM_MODEL_OPTION,
+  CUSTOM_MODEL_ADD_OPTION: modelOptions.CUSTOM_MODEL_ADD_OPTION,
+  CUSTOM_MODEL_MANAGE_OPTION: modelOptions.CUSTOM_MODEL_MANAGE_OPTION,
+  addCustomModel: modelOptions.addCustomModel,
+  buildReplacementModelOptions: modelOptions.buildReplacementModelOptions,
+  deleteCustomModel: modelOptions.deleteCustomModel,
+  renameCustomModel: modelOptions.renameCustomModel,
+  resolveReplacementModel: modelOptions.resolveReplacementModel,
   providerName,
   providerSupportsThinking,
   providerSupportsThinkingEffort,

@@ -1,6 +1,6 @@
 {
   "name": "deepseek-claude-setup",
-  "version": "1.6.4",
+  "version": "1.6.5",
   "description": "一键配置 DeepSeek 模型与思考强度代理接入 Claude Code / Codex CLI",
   "bin": {
     "deepseek-claude-setup": "./cli.js"
