@@ -13,6 +13,27 @@ const providers = require('./providers');
 
 const DEFAULT_PROVIDER = 'deepseek';
 
+function normalizeCustomModels(providerConfig) {
+  const seen = new Set();
+  const result = [];
+  for (const model of Array.isArray(providerConfig?.customModels) ? providerConfig.customModels : []) {
+    const id = typeof model === 'string' ? model.trim() : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
+}
+
+function normalizeProviderConfig(provider, providerConfig) {
+  const normalized = provider
+    ? provider.normalizeConfig(providerConfig || {})
+    : { ...(providerConfig || {}) };
+  const customModels = normalizeCustomModels(providerConfig);
+  if (customModels.length) normalized.customModels = customModels;
+  return normalized;
+}
+
 /**
  * 将历史配置或新配置归一化为 Provider Gateway 结构
  * @param {object|null} config - 原始配置对象
@@ -36,16 +57,12 @@ function normalizeConfig(config) {
   const normalizedProviders = {};
   for (const [id, providerConfig] of Object.entries(rawProviders)) {
     const provider = providers.getProvider(id);
-    normalizedProviders[id] = provider
-      ? provider.normalizeConfig(providerConfig || {})
-      : { ...(providerConfig || {}) };
+    normalizedProviders[id] = normalizeProviderConfig(provider, providerConfig);
   }
 
   if (!normalizedProviders[activeProvider]) {
     const provider = providers.getProvider(activeProvider);
-    normalizedProviders[activeProvider] = provider
-      ? provider.normalizeConfig({})
-      : {};
+    normalizedProviders[activeProvider] = normalizeProviderConfig(provider, {});
   }
 
   const activeConfig = normalizedProviders[activeProvider] || {};

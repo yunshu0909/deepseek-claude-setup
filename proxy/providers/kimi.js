@@ -9,8 +9,8 @@
  * - v0.6 误标 `claudeCode: null`（"无 Anthropic 端点"）——**是错的**。Kimi 按量有官方
  *   Anthropic 兼容端点 `https://api.moonshot.cn/anthropic`（国际 api.moonshot.ai），
  *   Claude Code 一等支持 → `claudeCode: 'anthropic_forward'`。
- * - 模型 ID 过时（kimi-k2/kimi-k2-think）→ 换 kimi-k2.6/k2.5/thinking/turbo。
- * - thinking 用 `thinking.type` enabled/disabled，无 effort 档位 → thinkingEffort:false。
+ * - 模型 ID 过时（kimi-k2/kimi-k2-think）→ 换 kimi-k2.7-code/k2.6/k2.5。
+ * - K2.7 Code 始终开启 thinking，K2.6/K2.5 支持 enabled/disabled；无 effort 档位。
  *
  * 真实接入状态（2026-05-16 已真打 api.moonshot.cn 验证，非文档拍脑袋）：
  * - **已 smoke 验证**：`CLIENT_E2E_PROVIDER=kimi npm run e2e:clients` 真打 Moonshot，
@@ -48,10 +48,9 @@ const kimi = gateway.attachAdapter({
   id: 'kimi',
   displayName: 'Kimi (Moonshot)',
   defaultModel: DEFAULT_MODEL,
-  // 模型名据 2026-06-07 真打 api.moonshot.cn /v1/models 校正：本账号仅 kimi-k2.6 / kimi-k2.5
-  // 可用（旧的 kimi-k2-thinking / kimi-k2-turbo-preview 已 404 下线）。
   models: [
-    { id: 'kimi-k2.6', label: 'kimi-k2.6（旗舰，编码/Agent）', hint: '推荐' },
+    { id: 'kimi-k2.6', label: 'kimi-k2.6（通用/多模态/Agent）', hint: '推荐' },
+    { id: 'kimi-k2.7-code', label: 'kimi-k2.7-code（Coding/Agent，始终开启思考）' },
     { id: 'kimi-k2.5', label: 'kimi-k2.5（均衡/轻量）' },
   ],
   defaults: DEFAULTS,
@@ -60,7 +59,7 @@ const kimi = gateway.attachAdapter({
     codex: 'chat_bridge',
     openaiChat: true,
     openaiResponses: false,
-    thinking: true,                  // thinking.type enabled/disabled
+    thinking: true,                  // K2.7 强制 enabled；K2.6/K2.5 支持 enabled/disabled
     thinkingEffort: false,           // 无 effort 档位（同智谱）
     anthropicThinking: true,         // 文档称支持，待真 smoke 确认
     chatStreamOptions: true,
@@ -86,6 +85,16 @@ kimi.parseChatStreamChunk = function parseChatStreamChunk(parsed) {
     };
   }
   return baseParse(parsed);
+};
+
+/**
+ * Kimi K2.7 Code 官方要求 thinking.type 只能是 enabled；发送 disabled 会 400。
+ * @param {{model:string,thinking:string}} runtime - 当前模型与用户请求的 thinking。
+ * @returns {string} 实际发送给上游并展示在 health/log 中的 thinking。
+ */
+kimi.resolveThinking = function resolveThinking(runtime) {
+  if (runtime?.model === 'kimi-k2.7-code' && runtime.thinking === 'disabled') return 'enabled';
+  return runtime?.thinking || 'enabled';
 };
 
 module.exports = kimi;

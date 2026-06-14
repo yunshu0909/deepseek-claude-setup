@@ -2,21 +2,21 @@
 
 让 Claude Code、OpenAI Codex CLI 和 Hermes Agent 透明使用 DeepSeek、智谱 BigModel、Kimi 模型，且**思考模式真的生效**。
 
-> ✅ 当前版本（v1.6.2）已支持 **3 个 provider**：DeepSeek、智谱 BigModel、Kimi（Moonshot）。三家都跑过同一套真实客户端认证（详见底部「支持的 Provider」与路线图），认证报告会记录真实 API token 用量。
+> ✅ 当前版本（v1.6.3）已支持 **3 个 provider**：DeepSeek、智谱 BigModel、Kimi（Moonshot）。配置向导支持保存自定义模型 ID；三家都跑过同一套真实客户端认证（详见底部「支持的 Provider」与路线图），认证报告会记录真实 API token 用量。
 
 ---
 
 ## 支持的 Provider
 
-配置向导**第一步就是选 Provider**，选好后输该 provider 的 API Key、选模型，再决定接入 Claude Code / Codex / Hermes 哪几个客户端。新增 provider 只需在 registry 注册一个 adapter，向导自动展开。
+配置向导**第一步就是选 Provider**，选好后输该 provider 的 API Key、选模型，再决定接入 Claude Code / Codex / Hermes 哪几个客户端。模型选择支持内置推荐列表，也支持直接输入自定义模型 ID；新增 provider 只需在 registry 注册一个 adapter，向导自动展开。
 
 | Provider | id | 默认端点 | 模型示例 | 思考模式 | 思考强度档（effort） |
 |---|---|---|---|---|---|
 | **DeepSeek** | `deepseek` | api.deepseek.com | deepseek-v4-pro / deepseek-v4-flash | ✅ | ✅ high / max |
-| **智谱 BigModel** | `zai` | open.bigmodel.cn | glm-5.1 / glm-5 / glm-5-turbo / glm-4.7 | ✅ | ❌（向导自动跳过强度选择） |
-| **Kimi（Moonshot）** | `kimi` | api.moonshot.cn | kimi-k2.6 / kimi-k2.5 | ✅ | ❌（向导自动跳过强度选择） |
+| **智谱 BigModel** | `zai` | open.bigmodel.cn | glm-5.1 / glm-5 / glm-5-turbo / glm-4.7 / glm-4.5-air | ✅ | ❌（向导自动跳过强度选择） |
+| **Kimi（Moonshot）** | `kimi` | api.moonshot.cn | kimi-k2.6 / kimi-k2.7-code / kimi-k2.5 | ✅ | ❌（向导自动跳过强度选择） |
 
-> 智谱 / Kimi 支持思考模式但没有 effort 强度档，向导检测到 `thinkingEffort:false` 会自动跳过强度选择；只有 DeepSeek 会让你选 high / max。
+> 智谱 / Kimi 支持思考模式但没有 effort 强度档，向导检测到 `thinkingEffort:false` 会自动跳过强度选择；只有 DeepSeek 会让你选 high / max。Kimi `kimi-k2.7-code` 官方要求始终开启 thinking，本工具会在该模型下把 `disabled` 请求提升为 effective `enabled`，避免上游 400。
 
 三家 provider 都经过**同一套 56 例真实客户端认证**（真 Claude Code + 真 Codex + Hermes 打真实 API，非 capture 演习）：macOS 上 DeepSeek / 智谱 / Kimi 各 55/55 PASS，Linux 上 DeepSeek 55/55 PASS。
 
@@ -50,7 +50,7 @@ Hermes Agent 默认有自己的模型配置和 provider key 管理。如果它�
 npx -y github:yunshu0909/deepseek-claude-setup
 ```
 
-**首次运行**：拉到 GitHub 最新版，进配置向导（**选 Provider（DeepSeek / 智谱 / Kimi）** → 输该 provider 的 API Key → 选模型 → 选思考模式 →（仅 DeepSeek）选思考深度），然后进主面板。
+**首次运行**：拉到 GitHub 最新版，进配置向导（**选 Provider（DeepSeek / 智谱 / Kimi）** → 输该 provider 的 API Key → 选内置模型或输入自定义模型 ID → 选思考模式 →（仅 DeepSeek）选思考深度），然后进主面板。
 
 **已经装过的用户**（v1.4.0+）：每次启动自动检测 GitHub `main` 最新 commit——发现新版本就自动清 `~/.npm/_npx` 缓存 + 重新 `npx` + 重启进程，**无需手动操作**。`proxy.js` 同样会被检测内容变化并热重启代理。
 
@@ -342,7 +342,7 @@ Windows 报告可由 Windows 真机单独生成后人工合并；release gate �
 npm test
 ```
 
-124 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 provider certification 的报告、release gate、capability-aware capture runner、true-key runner、Linux Hermes runner 和 tokenUsage 汇总。
+129 个自动化用例覆盖：配置存储、settings/codex 文件 patch/restore、自定义模型 ID 保存、Kimi K2.7 Code thinking 规则、Anthropic 透传、Codex 流式状态机、并行 tool_calls 合并、reasoning_content 多场景回传、连接错误透明重试、Hermes config patch/restore、OpenAI Chat Completions 入口、工具请求 5xx fallback、跨平台 autostart 抽象（macOS launchd / Windows schtasks / Linux systemd），以及 provider certification 的报告、release gate、capability-aware capture runner、true-key runner、Linux Hermes runner 和 tokenUsage 汇总。
 
 测试使用临时目录 + 本地假 DeepSeek 上游，**不调用真实 API，不修改真实 `~/.claude` / `~/.codex` / Hermes 配置**。
 
@@ -414,6 +414,7 @@ systemctl daemon-reload 2>/dev/null
 - ✅ **Provider Gateway 架构（v1.6.0）** — 把 DeepSeek 从一次性透传迁到 provider 无关、能力声明驱动的网关核心 + 原子部署；智谱 / Kimi 的实验底子保存在 git tag `archive/v1.6.0-provider-gateway`
 - ✅ **接入智谱 + Kimi（v1.6.1）** — 新增 `proxy/providers/zai.js` / `proxy/providers/kimi.js` 两个 adapter，向导第一步可选 Provider；三家共用同一套真实客户端认证
 - ✅ **认证可信度 + Token usage（v1.6.2）** — 修复非 DeepSeek provider capture 假绿，认证断言改为 capability-aware；`certify:provider` 支持 `--model` / `--flash-model`，报告新增真实 API tokenUsage 汇总
+- ✅ **自定义模型保存 + Kimi K2.7 Code（v1.6.3）** — 向导支持保存 provider 级自定义模型 ID；Kimi 内置可选 `kimi-k2.7-code`，并处理其 thinking 只能 enabled 的上游约束；智谱补入真测通过的 `glm-4.5-air`
 
 下一步：
 

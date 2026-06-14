@@ -21,6 +21,8 @@ const configStore = require('./src/config-store');
 const settingsPatcher = require('./src/settings-patcher');
 const codexPatcher = require('./src/codex-patcher');
 const proxyManager = require('./src/proxy-manager');
+const ui = require('./src/ui');
+const providerRegistry = require('./proxy/providers');
 
 let passed = 0;
 let failed = 0;
@@ -196,6 +198,44 @@ async function run() {
   configStore.write(cfg);
   check('writes and reads selected model/effort', () => {
     assert.deepStrictEqual(configStore.read(), cfg);
+  });
+
+  console.log('\n-- ui config helpers --');
+  const zaiProvider = providerRegistry.getProvider('zai');
+  check('model options keep a saved custom model visible', () => {
+    const options = ui.buildModelOptions(zaiProvider, 'glm-5.2');
+    assert.strictEqual(options[0].value, 'glm-5.2');
+    assert.match(options[0].label, /当前自定义模型/);
+    assert.strictEqual(options[0].hint, '已保存');
+    assert.strictEqual(options[options.length - 1].value, ui.CUSTOM_MODEL_OPTION);
+  });
+  check('model options do not duplicate built-in selected models', () => {
+    const options = ui.buildModelOptions(zaiProvider, 'glm-5.1');
+    assert.strictEqual(options.filter(option => option.value === 'glm-5.1').length, 1);
+  });
+  check('model options preserve provider-level custom models', () => {
+    const options = ui.buildModelOptions(zaiProvider, 'glm-5.1', ['glm-5.2', 'glm-5.2', ' glm-custom ']);
+    assert.strictEqual(options.filter(option => option.value === 'glm-5.2').length, 1);
+    assert.strictEqual(options.filter(option => option.value === 'glm-custom').length, 1);
+  });
+  check('provider config saves arbitrary custom model ids', () => {
+    const customCfg = ui.buildProviderConfig(null, 'zai', {
+      apiKey: 'zhipu-test-key',
+      model: 'glm-5.2',
+      customModels: ['glm-5.2'],
+      thinking: 'enabled',
+      effort: 'max',
+    });
+    assert.strictEqual(customCfg.activeProvider, 'zai');
+    assert.strictEqual(customCfg.model, 'glm-5.2');
+    assert.strictEqual(customCfg.providers.zai.model, 'glm-5.2');
+    assert.deepStrictEqual(customCfg.providers.zai.customModels, ['glm-5.2']);
+  });
+  check('Kimi K2.7 Code keeps thinking enabled because upstream rejects disabled', () => {
+    const kimiProvider = providerRegistry.getProvider('kimi');
+    assert.ok(kimiProvider.models.some(model => model.id === 'kimi-k2.7-code'));
+    assert.strictEqual(kimiProvider.resolveThinking({ model: 'kimi-k2.7-code', thinking: 'disabled' }), 'enabled');
+    assert.strictEqual(kimiProvider.resolveThinking({ model: 'kimi-k2.6', thinking: 'disabled' }), 'disabled');
   });
 
   console.log('\n-- settings-patcher --');

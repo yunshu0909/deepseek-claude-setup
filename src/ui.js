@@ -49,7 +49,7 @@ function providerSupportsThinkingEffort(config) {
  *
  * @param {object|null} existing - 现有配置，兼容旧版扁平结构
  * @param {string} providerId - 当前选中的 provider id
- * @param {{apiKey: string, model: string, thinking: string, effort: string}} fields - 向导输入字段
+ * @param {{apiKey: string, model: string, customModels?: string[], thinking: string, effort: string}} fields - 向导输入字段
  * @returns {object} 归一化后的 Provider Gateway 配置
  */
 function buildProviderConfig(existing, providerId, fields) {
@@ -71,6 +71,7 @@ function buildProviderConfig(existing, providerId, fields) {
         ...previousProviderConfig,
         apiKey: fields.apiKey,
         model: fields.model,
+        customModels: fields.customModels || previousProviderConfig.customModels,
       },
     },
   });
@@ -100,6 +101,7 @@ function supportsEmoji() {
 const I_EMOJI = { tool: '🔧', robot: '🤖', cmd: '⌘',   hermes: '◇', brain: '🧠', dot: '🟢', circle: '○', warn: '⚠',   cog: '⚙',   cross: '✕',   bye: '👋',     wrench: '🔧', info: 'ⓘ' };
 const I_ASCII = { tool: '[ ]', robot: '[C]', cmd: '[X]', hermes: '[H]', brain: '[T]', dot: '*', circle: '○', warn: '[!]', cog: '[*]', cross: '[x]', bye: '[bye]', wrench: '[F]', info: '[i]' };
 const I = supportsEmoji() ? I_EMOJI : I_ASCII;
+const CUSTOM_MODEL_OPTION = '__deepseek_claude_custom_model__';
 
 // 第一步：选择 provider。后续接入新 provider 只需在 registry 注册，向导自动展开。
 async function stepProvider(existing) {
@@ -139,18 +141,130 @@ async function stepApiKey(provider, existing) {
   }
 }
 
-// 第三步：选择模型。选项来自所选 provider 的 models，默认 defaultModel。
-async function stepModel(provider, existing) {
+function normalizeModelId(model) {
+  return typeof model === 'string' ? model.trim() : '';
+}
+
+function normalizeCustomModels(models) {
+  const seen = new Set();
+  const result = [];
+  for (const model of Array.isArray(models) ? models : []) {
+    const id = normalizeModelId(model);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
+}
+
+function providerModelIds(provider) {
+  return new Set((Array.isArray(provider.models) ? provider.models : [])
+    .map(model => normalizeModelId(model?.id))
+    .filter(Boolean));
+}
+
+/**
+ * 构造模型选择列表
+ *
+ * 内置 models 是推荐选项；已保存但未内置的自定义模型必须继续展示，避免新模型升级前被向导吞掉。
+ *
+ * @param {object} provider - 当前 provider 定义
+ * @param {string} existing - 当前已保存模型
+ * @param {string[]} customModels - 当前 provider 已保存的自定义模型
+ * @returns {Array<{value: string, label: string, hint?: string}>} clack select options
+ */
+function buildModelOptions(provider, existing, customModels = []) {
+  const models = Array.isArray(provider.models) ? provider.models : [];
+  const options = [];
+  const knownIds = new Set();
+
+  for (const model of models) {
+    const id = normalizeModelId(model?.id);
+    if (!id || knownIds.has(id)) continue;
+    knownIds.add(id);
+    options.push({
+      value: id,
+      label: model.label || id,
+      hint: model.hint,
+    });
+  }
+
+  const defaultModel = normalizeModelId(provider.defaultModel);
+  if (defaultModel && !knownIds.has(defaultModel)) {
+    knownIds.add(defaultModel);
+    options.push({ value: defaultModel, label: defaultModel, hint: '默认' });
+  }
+
+  const existingModel = normalizeModelId(existing);
+  const savedCustomModels = normalizeCustomModels([existingModel, ...customModels])
+    .filter(model => !knownIds.has(model));
+
+  if (existingModel && savedCustomModels.includes(existingModel)) {
+    options.unshift({
+      value: existingModel,
+      label: `当前自定义模型：${existingModel}`,
+      hint: '已保存',
+    });
+  }
+  for (const model of savedCustomModels) {
+    if (model === existingModel) continue;
+    options.push({
+      value: model,
+      label: `自定义模型：${model}`,
+      hint: '已保存',
+    });
+  }
+
+  options.push({
+    value: CUSTOM_MODEL_OPTION,
+    label: existingModel ? '输入/修改自定义模型 ID' : '输入自定义模型 ID',
+    hint: '新模型/未内置模型',
+  });
+
+  return options;
+}
+
+function addCustomModel(provider, customModels, model) {
+  const modelId = normalizeModelId(model);
+  if (!modelId || providerModelIds(provider).has(modelId)) return normalizeCustomModels(customModels);
+  return normalizeCustomModels([modelId, ...customModels]);
+}
+
+function initialModelSelection(provider, existing) {
+  return normalizeModelId(existing)
+    || normalizeModelId(provider.defaultModel)
+    || normalizeModelId(provider.models?.[0]?.id)
+    || CUSTOM_MODEL_OPTION;
+}
+
+// 第三步：选择模型。内置 models 是推荐列表；新模型可直接输入自定义 ID 并保存。
+async function stepModel(provider, existing, customModels = []) {
   const m = await select({
     message: '选择模型',
-    options: provider.models.map(model => ({
-      value: model.id,
-      label: model.label || model.id,
-      hint: model.hint,
-    })),
-    initialValue: existing || provider.defaultModel || provider.models[0]?.id,
+    options: buildModelOptions(provider, existing, customModels),
+    initialValue: initialModelSelection(provider, existing),
   });
-  return isCancel(m) ? null : m;
+  if (isCancel(m)) return null;
+  if (m !== CUSTOM_MODEL_OPTION) return {
+    model: m,
+    customModels: addCustomModel(provider, customModels, m),
+  };
+
+  const customModel = await text({
+    message: `输入 ${provider.displayName} 模型 ID`,
+    placeholder: provider.defaultModel || provider.models?.[0]?.id || 'model-id',
+    initialValue: normalizeModelId(existing),
+    validate(value) {
+      if (!normalizeModelId(value)) return '请输入模型 ID';
+      return;
+    },
+  });
+  if (isCancel(customModel)) return null;
+  const model = normalizeModelId(customModel);
+  return {
+    model,
+    customModels: addCustomModel(provider, customModels, model),
+  };
 }
 
 // 第四步：选择思考等级
@@ -214,8 +328,8 @@ async function configWizard(existing) {
   const apiKey = await stepApiKey(provider, providerConfig.apiKey || normalized?.apiKey);
   if (apiKey === null) { outro('已取消'); return null; }
 
-  const model = await stepModel(provider, providerConfig.model || normalized?.model);
-  if (model === null) { outro('已取消'); return null; }
+  const modelChoice = await stepModel(provider, providerConfig.model || normalized?.model, providerConfig.customModels);
+  if (modelChoice === null) { outro('已取消'); return null; }
 
   // capability-aware：provider 不支持 thinking 直接跳过思考相关步骤
   let thinking = 'disabled';
@@ -231,7 +345,7 @@ async function configWizard(existing) {
     }
   }
 
-  const cfg = buildProviderConfig(normalized, providerId, { apiKey, model, thinking, effort });
+  const cfg = buildProviderConfig(normalized, providerId, { apiKey, model: modelChoice.model, customModels: modelChoice.customModels, thinking, effort });
 
   if (!await stepConfirm(cfg)) {
     outro('已取消');
@@ -595,6 +709,8 @@ module.exports = {
   disableHermes,
   diagnoseHermes,
   buildProviderConfig,
+  buildModelOptions,
+  CUSTOM_MODEL_OPTION,
   providerName,
   providerSupportsThinking,
   providerSupportsThinkingEffort,

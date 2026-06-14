@@ -85,8 +85,12 @@ function resolvedModel(payloadModel) {
   return CONFIG.model || payloadModel || providerDefaultModel();
 }
 
-function resolvedThinking() {
-  return providerSupportsThinking() ? gateway.normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
+function resolvedThinking(model) {
+  const requested = providerSupportsThinking() ? gateway.normalizeThinking(CONFIG.thinking || 'enabled') : 'unsupported';
+  const provider = activeProviderDefinition();
+  return typeof provider.resolveThinking === 'function'
+    ? provider.resolveThinking({ model: model || CONFIG.model || providerDefaultModel(), thinking: requested })
+    : requested;
 }
 
 function resolvedEffort() {
@@ -94,12 +98,13 @@ function resolvedEffort() {
 }
 
 function healthBody() {
-  const thinking = resolvedThinking();
+  const model = CONFIG.model || providerDefaultModel();
+  const thinking = resolvedThinking(model);
   return JSON.stringify({
     service: SERVICE_NAME,
     ok: true,
     provider: CONFIG.activeProvider || 'deepseek',
-    model: CONFIG.model || providerDefaultModel(),
+    model,
     thinking: thinking === 'unsupported' ? 'unsupported' : thinking,
     effort: thinking === 'enabled' && providerSupportsThinkingEffort() ? resolvedEffort() : null,
   });
@@ -109,7 +114,8 @@ function healthBody() {
  * 处理 Codex Responses API 请求：组装 GatewayRequest → provider adapter → Codex 发射器
  */
 function handleResponses(req, res, payload) {
-  const thinking = resolvedThinking();
+  const model = resolvedModel(payload.model);
+  const thinking = resolvedThinking(model);
   const messages = responsesInputToMessages(payload);
   const tools = responsesToolsToChatTools(payload.tools);
 
@@ -118,7 +124,7 @@ function handleResponses(req, res, payload) {
   }
 
   const gatewayRequest = gateway.makeGatewayRequest({
-    model: resolvedModel(payload.model),
+    model,
     messages,
     tools,
     thinking,
@@ -163,10 +169,11 @@ function chatPassthroughFields(payload) {
  * @returns {void}
  */
 function handleChatCompletions(req, res, payload) {
-  const thinking = resolvedThinking();
+  const model = resolvedModel(payload.model);
+  const thinking = resolvedThinking(model);
   const provider = activeProviderDefinition();
   const gatewayRequest = gateway.makeGatewayRequest({
-    model: resolvedModel(payload.model),
+    model,
     messages: Array.isArray(payload.messages) ? payload.messages : [],
     tools: payload.tools,
     thinking,
@@ -308,12 +315,13 @@ function handleChatCompletions(req, res, payload) {
  */
 function handleAnthropic(req, res, payload) {
   const incomingModel = payload.model || '?';
-  const thinking = resolvedThinking();
+  const model = resolvedModel(payload.model);
+  const thinking = resolvedThinking(model);
   const provider = activeProviderDefinition();
   const { target, payload: mutated } = provider.buildAnthropicRequestSpec(
     payload,
     activeProviderConfig(),
-    { model: resolvedModel(payload.model), thinking, effort: resolvedEffort(), requestUrl: req.url },
+    { model, thinking, effort: resolvedEffort(), requestUrl: req.url },
   );
 
   const bodyOut = JSON.stringify(mutated);
@@ -542,7 +550,8 @@ server.on('error', err => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  const thinking = resolvedThinking();
+  const model = CONFIG.model || providerDefaultModel();
+  const thinking = resolvedThinking(model);
   const effort = thinking === 'enabled' && providerSupportsThinkingEffort() ? resolvedEffort() : 'off';
-  log(`代理启动 localhost:${PORT} provider=${CONFIG.activeProvider || 'deepseek'} model=${CONFIG.model || providerDefaultModel()} thinking=${thinking} effort=${effort}`);
+  log(`代理启动 localhost:${PORT} provider=${CONFIG.activeProvider || 'deepseek'} model=${model} thinking=${thinking} effort=${effort}`);
 });

@@ -42,6 +42,7 @@ module.exports = gateway.attachAdapter({
     { id: 'glm-5', label: 'glm-5（长程任务）', hint: 'Agentic' },
     { id: 'glm-5-turbo', label: 'glm-5-turbo（快速均衡）', hint: 'Turbo' },
     { id: 'glm-4.7', label: 'glm-4.7（代码/工具调用）', hint: 'Stable' },
+    { id: 'glm-4.5-air', label: 'glm-4.5-air（轻量高速）' },
   ],
   defaults: DEFAULTS,
   capabilities: {

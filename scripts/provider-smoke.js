@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { getProviderProfile } = require('./certification/provider-profiles');
+const providerRegistry = require('../proxy/providers');
 const { makeTempRoot, randomPort, removeIfExists, requestJson } = require('./certification/runner-utils');
 const { redactText } = require('./certification/report-writer');
 const { emptyTokenUsage, parseGatewayLogUsage } = require('./lib/token-usage');
@@ -94,17 +95,23 @@ async function runSmoke(options = {}) {
   const port = randomPort();
   const logPath = path.join(tmpRoot, 'gateway.log');
   const smokeModel = modelFromName(options.model || process.env.PROVIDER_SMOKE_MODEL || profile.defaultModel, profile);
+  const providerDef = providerRegistry.getProvider(providerId);
+  const requestedThinking = options.thinking || process.env.PROVIDER_SMOKE_THINKING || 'enabled';
+  const effectiveThinking = typeof providerDef?.resolveThinking === 'function'
+    ? providerDef.resolveThinking({ model: smokeModel, thinking: requestedThinking })
+    : requestedThinking;
   // v1.6.1：多 provider 配置——apiKey/model 必须落在 providers.[id]（顶层会被 runtime-config 归一成 deepseek）。
   const config = {
     activeProvider: providerId,
     providers: { [providerId]: { apiKey, model: smokeModel } },
-    thinking: options.thinking || process.env.PROVIDER_SMOKE_THINKING || 'enabled',
+    thinking: requestedThinking,
     effort: options.effort || process.env.PROVIDER_SMOKE_EFFORT || 'max',
   };
   const result = {
     providerId,
     model: smokeModel,
     thinking: config.thinking,
+    effectiveThinking,
     effort: config.effort,
     status: 'FAIL',
     passed: false,
@@ -122,10 +129,10 @@ async function runSmoke(options = {}) {
       effort: health.json?.effort,
     };
     if (health.json?.model !== smokeModel) throw new Error(`health model mismatch: ${health.body}`);
-    if (health.json?.thinking !== config.thinking) throw new Error(`health thinking mismatch: ${health.body}`);
+    if (health.json?.thinking !== effectiveThinking) throw new Error(`health thinking mismatch: ${health.body}`);
     // zai/kimi 等无 effort 档 provider（profile.thinkingEfforts 为空）→ 网关正确报告 effort=null
     const hasEffortTiers = (profile.thinkingEfforts || []).length > 0;
-    const expectedEffort = (config.thinking === 'disabled' || !hasEffortTiers) ? null : config.effort;
+    const expectedEffort = (effectiveThinking === 'disabled' || !hasEffortTiers) ? null : config.effort;
     if ((health.json?.effort ?? null) !== expectedEffort) throw new Error(`health effort mismatch: ${health.body}`);
     result.positiveAssertions += 3;
 
